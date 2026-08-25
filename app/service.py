@@ -63,15 +63,22 @@ def binary_cache_path(arch: str) -> Path:
 # --------------------------------------------------------------------------
 # notifications
 # --------------------------------------------------------------------------
-def notify(s: Settings, event: str, message: str, detail: Optional[dict] = None) -> None:
-    if not s.webhook_url:
-        return
+def _webhook_parts(s: Settings):
     headers = {"Content-Type": "application/json"}
+    err = None
     if s.webhook_headers.strip():
         try:
             headers.update(json.loads(s.webhook_headers))
         except Exception as e:
-            log.warning("bad webhook_headers JSON: %s", e)
+            err = "webhook_headers is not valid JSON: %s" % e
+            log.warning(err)
+    return headers, err
+
+
+def notify(s: Settings, event: str, message: str, detail: Optional[dict] = None) -> None:
+    if not s.webhook_url:
+        return
+    headers, _ = _webhook_parts(s)
     payload = {
         "source": "valetudo-restore",
         "event": event,
@@ -85,6 +92,62 @@ def notify(s: Settings, event: str, message: str, detail: Optional[dict] = None)
     except Exception as e:
         log.warning("webhook failed: %s", e)
         store.log_event("warn", "notify", "webhook failed: %s" % e)
+
+
+def test_webhook(s: Optional[Settings] = None) -> dict:
+    """
+    Fire a test notification and report exactly what happened.
+
+    Returns the HTTP status rather than a bare ok/fail: Home Assistant answers
+    404 for a webhook id that does not exist, which is the single most common
+    misconfiguration and is invisible if you only check "did it throw".
+    """
+    s = s or load_settings()
+    if not s.webhook_url:
+        return {"ok": False, "error": "No webhook URL configured."}
+    headers, hdr_err = _webhook_parts(s)
+    if hdr_err:
+        return {"ok": False, "error": hdr_err}
+
+    payload = {
+        "source": "valetudo-restore",
+        "event": "test",
+        "message": "Test notification from valetudo-restore. "
+                   "If you can see this, notifications are working.",
+        "robot": s.robot_host,
+        "ts": int(time.time()),
+        "detail": {"test": True},
+    }
+    started = time.time()
+    try:
+        r = httpx.post(s.webhook_url, json=payload, headers=headers, timeout=10.0)
+    except httpx.ConnectError as e:
+        store.log_event("warn", "notify", "webhook test failed: %s" % e)
+        return {"ok": False, "error": "Could not connect: %s" % e,
+                "hint": "Check the host/port is reachable from inside the container."}
+    except httpx.TimeoutException:
+        store.log_event("warn", "notify", "webhook test timed out")
+        return {"ok": False, "error": "Timed out after 10s."}
+    except Exception as e:
+        store.log_event("warn", "notify", "webhook test failed: %s" % e)
+        return {"ok": False, "error": str(e)}
+
+    ms = int((time.time() - started) * 1000)
+    body = (r.text or "")[:300]
+    out = {"ok": r.is_success, "status": r.status_code, "ms": ms, "body": body,
+           "url": s.webhook_url}
+    if not r.is_success:
+        if r.status_code == 404:
+            out["hint"] = ("404 - Home Assistant returns this when the webhook id "
+                           "does not exist. Check the automation's trigger id "
+                           "matches the URL.")
+        elif r.status_code in (401, 403):
+            out["hint"] = "Rejected. If the endpoint needs a token, add it under Extra headers."
+        elif r.status_code >= 500:
+            out["hint"] = "The receiving server errored. The request did arrive."
+    store.log_event("info" if r.is_success else "warn", "notify",
+                    "webhook test -> HTTP %s (%dms)" % (r.status_code, ms))
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -321,6 +384,127 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
 # --------------------------------------------------------------------------
 # monitoring
 # --------------------------------------------------------------------------
+def extract_map_archive(blob: bytes) -> bytes:
+    """
+    Accept either a full valetudo-restore backup or a bare map tarball and
+    return the map tarball bytes.
+
+    The map is NOT a single JSON file - /data/map is a directory holding binary
+    SLAM data (app_map.bin, fine_large.bin) alongside a few JSON descriptors, so
+    the transportable unit is the gzipped tar of that directory.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+            names = t.getnames()
+    except Exception as e:
+        raise ValueError(
+            "Not a readable .tar.gz. Upload a backup archive from this tool, or "
+            "the data_map.tar.gz extracted from one. The map is not a JSON file."
+        ) from e
+
+    if "data_map.tar.gz" in names:            # a full backup archive
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+            f = t.extractfile("data_map.tar.gz")
+            if not f:
+                raise ValueError("data_map.tar.gz present but unreadable")
+            return f.read()
+
+    # a bare map tarball: expect the map descriptors at its root
+    if any(n.lstrip("./") in ("map_id.json", "version_file.json") for n in names):
+        return blob
+
+    raise ValueError(
+        "This archive does not look like map data. Expected either a backup "
+        "containing data_map.tar.gz, or a map tarball containing map_id.json. "
+        "Found: %s" % ", ".join(names[:8])
+    )
+
+
+def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
+                also_vendor_config: bool = False) -> dict:
+    """
+    Push /data/map back onto the robot.
+
+    Deliberately conservative:
+      * the robot's existing map is copied aside first, so this is reversible
+      * /mnt/private is never written - that is factory identity data and
+        corrupting it can brick the robot
+      * a reboot is recommended afterwards, because `ava` holds the map open and
+        will not pick up files changed underneath it
+    """
+    s = load_settings()
+    steps: list[str] = []
+
+    if blob is None:
+        if not filename:
+            rows = store.list_backups()
+            if not rows:
+                return {"ok": False, "error": "no backup available"}
+            filename = rows[0]["filename"]
+        p = BACKUP_DIR / filename
+        if not p.exists():
+            return {"ok": False, "error": "backup not found: %s" % filename}
+        blob = p.read_bytes()
+        steps.append("source: backup %s" % filename)
+    else:
+        steps.append("source: uploaded file (%d bytes)" % len(blob))
+
+    try:
+        map_tar = extract_map_archive(blob)
+        steps.append("map archive extracted (%d bytes)" % len(map_tar))
+
+        vendor_tar = None
+        if also_vendor_config:
+            try:
+                with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+                    f = t.extractfile("data_config.tar.gz")
+                    vendor_tar = f.read() if f else None
+            except Exception:
+                vendor_tar = None
+
+        with _client(s) as c:
+            probe = c.probe()
+            if not probe.ssh_ok:
+                raise R.RobotUnreachable(probe.error or "probe failed")
+
+            stamp = _stamp()
+            # reversible: keep the current map aside before overwriting
+            c.run("[ -d /data/map ] && cp -a /data/map /data/map.bak-%s" % stamp,
+                  timeout=120)
+            steps.append("existing map copied to /data/map.bak-%s" % stamp)
+
+            c.write_file("/tmp/_vr_map.tgz", map_tar)
+            rc, _, err = c.run(
+                "rm -rf /data/map && mkdir -p /data/map && "
+                "tar -xzf /tmp/_vr_map.tgz -C /data/map && rm -f /tmp/_vr_map.tgz",
+                timeout=180)
+            if rc != 0:
+                raise IOError("extract failed on robot: %s" % err.strip())
+            rc, out, _ = c.run("ls /data/map | wc -l")
+            steps.append("map restored (%s entries in /data/map)" % out.strip())
+
+            if vendor_tar:
+                c.write_file("/tmp/_vr_cfg.tgz", vendor_tar)
+                rc, _, err = c.run(
+                    "tar -xzf /tmp/_vr_cfg.tgz -C /data/config && rm -f /tmp/_vr_cfg.tgz",
+                    timeout=180)
+                steps.append("vendor config restored"
+                             if rc == 0 else "vendor config FAILED: %s" % err.strip())
+
+        store.log_event("info", "restore-map", "map restored", steps)
+        return {
+            "ok": True,
+            "steps": steps,
+            "note": "Reboot the robot for ava to pick up the new map - it holds "
+                    "the map files open and may otherwise overwrite them. The "
+                    "previous map is kept at /data/map.bak-%s." % stamp,
+        }
+    except Exception as e:
+        log.exception("map restore failed")
+        store.log_event("error", "restore-map", "map restore FAILED: %s" % e, steps)
+        return {"ok": False, "error": str(e), "steps": steps}
+
+
 def classify(s: Settings) -> tuple[str, R.Probe]:
     try:
         with _client(s) as c:

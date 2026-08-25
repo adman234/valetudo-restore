@@ -49,14 +49,26 @@
       });
   });
 
-  var kf = document.getElementById("keyform");
-  if (kf) {
-    kf.addEventListener("submit", function (ev) {
+  function wireUpload(formId, url, outSel, confirmMsg) {
+    var f = document.getElementById(formId);
+    if (!f) { return; }
+    f.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      fetch("/api/upload-key", { method: "POST", body: new FormData(kf) })
+      if (confirmMsg && !window.confirm(confirmMsg)) { return; }
+      var btn = f.querySelector("button[type=submit]");
+      var label = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "uploading…"; }
+      fetch(url, { method: "POST", body: new FormData(f) })
         .then(function (r) { return r.json(); })
-        .then(function (d) { show("#keyout", d); })
-        .catch(function (e) { show("#keyout", "Upload failed: " + e); });
+        .then(function (d) { show(outSel, d); })
+        .catch(function (e) { show(outSel, "Upload failed: " + e); })
+        .finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = label; }
+        });
     });
   }
+
+  wireUpload("keyform", "/api/upload-key", "#keyout", null);
+  wireUpload("mapform", "/api/restore-map", "#mapout",
+    "Restore map data onto the robot from this file? The current map is copied aside first.");
 })();

@@ -64,6 +64,16 @@
     <label class="wide">Webhook URL <input name="webhook_url" value="{{ s.webhook_url }}" placeholder="http://homeassistant:8123/api/webhook/valetudo"></label>
     <label class="wide">Extra headers (JSON) <input name="webhook_headers" value="{{ s.webhook_headers }}" placeholder='{"Authorization": "Bearer ..."}'></label>
   </div>
+  <div class="actions">
+    <button type="button" data-post="/api/test-webhook" data-out="#hookout">Send test notification</button>
+  </div>
+  <p class="hint">
+    Save first &mdash; the test uses the <em>saved</em> settings, not what is
+    currently typed in the box. The result shows the HTTP status, because Home
+    Assistant answers <code>404</code> for a webhook id that does not exist,
+    which otherwise just looks like silence.
+  </p>
+  <pre id="hookout" class="out" hidden></pre>
 
   <h2>Valetudo binary</h2>
   <div class="grid">
@@ -79,6 +89,30 @@
 
   <div class="actions"><button type="submit" class="primary">Save settings</button></div>
 </form>
+
+<section class="panel">
+  <h2>Home Assistant setup</h2>
+  <p class="hint">
+    Create an automation with a <strong>Webhook</strong> trigger, give it an id,
+    then point the URL above at
+    <code>http://&lt;ha-host&gt;:8123/api/webhook/&lt;your-id&gt;</code>.
+    The body is JSON, so <code>trigger.json.event</code> is one of
+    <code>test</code>, <code>wiped</code>, <code>crashed</code>,
+    <code>wipe_detected</code>, <code>restored</code>,
+    <code>restore_failed</code> or <code>backup_failed</code>.
+  </p>
+  <pre class="out">alias: Valetudo alert
+trigger:
+  - platform: webhook
+    webhook_id: valetudo
+    allowed_methods: [POST]
+    local_only: true
+action:
+  - service: notify.mobile_app_yourphone
+    data:
+      title: "Valetudo: {{ '{{ trigger.json.event }}' }}"
+      message: "{{ '{{ trigger.json.message }}' }}"</pre>
+</section>
 
 <section class="panel">
   <h2>Upload SSH key</h2>

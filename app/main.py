@@ -239,6 +239,29 @@ async def api_upload_key(file: UploadFile = File(...)):
     return {"ok": True, "path": str(dest), "bytes": len(data)}
 
 
+@app.post("/api/test-webhook")
+def api_test_webhook():
+    return service.test_webhook()
+
+
+@app.post("/api/restore-map")
+async def api_restore_map(
+    file: UploadFile = File(default=None),
+    filename: str = Form(default=""),
+    also_vendor_config: str = Form(default=""),
+):
+    """Restore /data/map from an uploaded archive, or from a stored backup."""
+    blob = None
+    if file is not None and getattr(file, "filename", ""):
+        blob = await file.read()
+        if len(blob) > 200 * 1024 * 1024:
+            return JSONResponse({"ok": False, "error": "file too large"},
+                                status_code=413)
+    vendor = str(also_vendor_config).lower() in ("1", "true", "on", "yes")
+    return service.restore_map(blob=blob, filename=filename or None,
+                               also_vendor_config=vendor)
+
+
 @app.get("/api/backups")
 def api_backups():
     store.reconcile_backups(BACKUP_DIR)

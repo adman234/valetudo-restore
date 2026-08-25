@@ -235,6 +235,50 @@ default is 02:30.
 
 ---
 
+## What a restore actually puts back
+
+A backup captures more than an automatic restore writes back, deliberately.
+
+| Restored automatically | Captured, but restored only on request |
+|---|---|
+| Valetudo binary | `/data/map` — map, rooms, no-go zones |
+| `valetudo_config.json` (all settings) | `/data/config` — vendor/ava config |
+| `_wipe_guard.sh` | `/mnt/misc` — calibration |
+| `_root_postboot.sh` boot hook | `/mnt/private` — **never written** |
+
+So after an auto-restore you get Valetudo and every one of its settings back,
+but the robot still needs a fresh mapping run unless you also restore the map.
+
+`/mnt/private` holds factory identity (did/key/sn/mac/cpuid). It is backed up
+because it cannot be regenerated, and never written back because corrupting it
+can brick the robot. Restore it by hand, deliberately, if you ever truly need to.
+
+### Restoring the map
+
+**The map is not a JSON file.** `/data/map` is a directory of binary SLAM data
+(`app_map.bin`, `fine_large.bin`, `wifi_fine.bin`) alongside a few JSON
+descriptors, so the transportable unit is a `.tar.gz`.
+
+Dashboard → **Restore map only**. Either restore from the newest backup, or
+upload an archive — both a full backup archive and a bare `data_map.tar.gz`
+are accepted, and anything else is rejected with an explanation.
+
+Safety properties:
+
+* the robot's current map is copied to `/data/map.bak-<timestamp>` first, so the
+  operation is reversible
+* `/mnt/private` is never touched
+* **reboot the robot afterwards** — `ava` holds the map files open and will not
+  pick up changes made underneath it
+
+### Testing notifications
+
+Settings → **Send test notification** posts a payload with `"event": "test"` and
+reports the HTTP status rather than a bare success/failure. That matters because
+Home Assistant answers `404` for a webhook id that does not exist — the most
+common misconfiguration, and indistinguishable from silence otherwise. The test
+uses *saved* settings, so save before testing.
+
 ## Notes from the field
 
 Things that are easy to get wrong on these robots, all handled by this tool:
@@ -271,6 +315,8 @@ hammering a robot that is genuinely broken.
 | POST | `/api/backup` | back up now |
 | POST | `/api/restore` | restore (optional `filename` form field) |
 | POST | `/api/monitor-tick` | run one monitoring poll |
+| POST | `/api/test-webhook` | send a test notification and report the HTTP status |
+| POST | `/api/restore-map` | restore `/data/map` from an upload or a stored backup |
 | GET | `/api/backups` | list archives |
 | GET | `/api/backups/{file}` | download an archive |
 | POST | `/api/backups/{file}/delete` | delete an archive |
@@ -298,6 +344,12 @@ camera and a microphone. Keep the `/config` volume private, don't expose the
 web UI to the internet, and consider a WAN firewall block for the robot itself.
 There is no authentication on the UI — put it behind your reverse proxy if you
 need one.
+
+**Backup archives contain secrets in plaintext.** A backup includes the Valetudo
+web UI basic-auth password, MQTT broker credentials, the miio cloud device token
+and `authorized_keys`. Anyone holding a backup file effectively has full access
+to the robot. Keep `/backups` off any share you would hand round, and treat a
+downloaded archive the same way you would treat the SSH key itself.
 
 ## Development
 
