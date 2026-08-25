@@ -47,6 +47,17 @@ BACKUP_ITEMS = [
     ("/mnt/private", "private.tar.gz", True),
 ]
 
+# Optional extras, controlled by settings. The voice pack is user-installed
+# content of a few MB: /data/config/ava/language_in_use records WHICH pack is
+# selected (and is inside data_config.tar.gz), but the audio itself lives in
+# /data/personalized_voice and is lost in a wipe. Without the original download
+# URL it cannot be regenerated, so it is worth capturing.
+OPTIONAL_ITEMS = {
+    "voice_pack": ("/data/personalized_voice", "personalized_voice.tar.gz", True),
+}
+
+P_VOICE = "/data/personalized_voice"
+
 
 class RobotAuthError(Exception):
     """Key rejected / auth failed - explicitly NOT evidence of a wipe."""

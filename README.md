@@ -146,6 +146,29 @@ put things back. Hence this tool.
 | `/data/config`, `/data/map` | robot config and maps |
 | `/mnt/misc` | calibration, LDS config, consumables |
 | `/mnt/private` | **irreplaceable** per-robot identity (did/key/sn/mac/cpuid) |
+| `/data/personalized_voice` | installed voice packs (optional, on by default) |
+
+### Quirks, system options and voice packs
+
+| Thing | Where it actually lives | Captured? |
+|---|---|---|
+| **Valetudo settings** (MQTT, timers, web UI auth, NTP, updater…) | `valetudo_config.json` | ✅ |
+| **Quirks** (carpet sensitivity, detergent, mop frequency…) | vendor state under `/data/config/ava/*` | ✅ via `data_config.tar.gz` |
+| **Voice pack selection** | `/data/config/ava/language_in_use` | ✅ via `data_config.tar.gz` |
+| **Voice pack audio** | `/data/personalized_voice/<NAME>/` | ✅ (set `VR_BACKUP_VOICE_PACK=false` to skip) |
+| **Consumable counters** | `/mnt/misc/consumable.json` | ✅ via `misc.tar.gz` |
+| **Wi-Fi credentials** | `/data/config/miio/wifi.conf` | ✅ via `data_config.tar.gz` |
+
+Quirks are *not* stored by Valetudo — it reads and writes them straight through
+to the vendor process, so they live in the vendor config and are covered by
+`data_config.tar.gz`. The voice pack is the one that needed special handling: the
+selection is a one-line file in the vendor config, but the audio is several MB
+under `/data/personalized_voice`, which a wipe destroys and which cannot be
+regenerated without the original download URL.
+
+Voice-pack *installation* in Valetudo takes a URL and a hash. Those are not
+persisted anywhere on the robot — only the extracted audio is — which is why
+capturing the files matters if you no longer have the link.
 
 The 37 MB Valetudo binary is deliberately **not** in the archive — it is always
 re-downloadable from GitHub. It is cached separately in `/config` so restores
@@ -245,6 +268,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_BACKUP_HOUR` | `2` | hour (0–23) |
 | `VR_BACKUP_MINUTE` | `30` | minute (0–59) |
 | `VR_KEEP_BACKUPS` | `14` | how many archives to retain |
+| `VR_BACKUP_VOICE_PACK` | `true` | include `/data/personalized_voice` (a few MB per backup) |
 | `VR_MONITOR_ENABLED` | `true` | enable monitoring |
 | `VR_POLL_INTERVAL_MINUTES` | `5` | how often to poll |
 | `VR_CONFIRM_SAMPLES` | `2` | consecutive identical verdicts required before acting |

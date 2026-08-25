@@ -201,9 +201,13 @@ def run_backup(kind: str = "scheduled") -> dict:
             manifest["uptime_s"] = probe.uptime_s
             manifest["factory_log"] = probe.factory_log
 
+            items = list(R.BACKUP_ITEMS)
+            if s.backup_voice_pack:
+                items.append(R.OPTIONAL_ITEMS["voice_pack"])
+
             tmp = path.with_suffix(".part")
             with tarfile.open(tmp, "w:gz") as tar:
-                for remote, member, is_dir in R.BACKUP_ITEMS:
+                for remote, member, is_dir in items:
                     try:
                         if is_dir:
                             if not c.path_exists(remote):
@@ -326,6 +330,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
 
             cfg = member("valetudo_config.json")
             guard = member("_wipe_guard.sh")
+            voice = member("personalized_voice.tar.gz")
 
             with _client(s) as c:
                 probe = c.probe()
@@ -350,6 +355,20 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
                 if s.restore_wipe_guard and guard:
                     c.write_file(R.P_GUARD, guard, mode="0755")
                     steps.append("wipe-guard restored")
+
+                # 3b. voice pack - user-installed audio a wipe destroys.
+                # /data/config/ava/language_in_use (restored with the vendor
+                # config) names the pack; without these files the robot would
+                # reference a pack that no longer exists.
+                if voice:
+                    c.write_file("/tmp/_vr_voice.tgz", voice)
+                    rc, _, err = c.run(
+                        "mkdir -p %s && tar -xzf /tmp/_vr_voice.tgz -C %s && "
+                        "rm -f /tmp/_vr_voice.tgz" % (R.P_VOICE, R.P_VOICE),
+                        timeout=300)
+                    steps.append("voice pack restored (%d bytes)" % len(voice)
+                                 if rc == 0 else
+                                 "voice pack FAILED: %s" % err.strip())
 
                 # 4. boot hook from the rootfs template
                 try:

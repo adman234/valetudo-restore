@@ -29,6 +29,9 @@ class Settings(BaseModel):
     backup_cron_hour: int = 2
     backup_cron_minute: int = 30
     keep_backups: int = Field(14, ge=1, le=365)
+    # Voice packs are a few MB of user-installed audio that a wipe destroys and
+    # that cannot be regenerated without the original download URL.
+    backup_voice_pack: bool = True
 
     # --- monitoring ---
     monitor_enabled: bool = True
@@ -74,6 +77,7 @@ ENV_MAP = {
     "VR_BACKUP_HOUR": "backup_cron_hour",
     "VR_BACKUP_MINUTE": "backup_cron_minute",
     "VR_KEEP_BACKUPS": "keep_backups",
+    "VR_BACKUP_VOICE_PACK": "backup_voice_pack",
     "VR_MONITOR_ENABLED": "monitor_enabled",
     "VR_POLL_INTERVAL_MINUTES": "poll_interval_minutes",
     "VR_CONFIRM_SAMPLES": "confirm_samples",
