@@ -63,6 +63,17 @@ async def lifespan(app: FastAPI):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     store.init_db()
+    # First run: persist whatever the environment seeded so the UI shows it and
+    # later env changes cannot silently override a UI edit.
+    from .models import SETTINGS_FILE, settings_from_env
+    if not SETTINGS_FILE.exists():
+        seeded = settings_from_env()
+        save_settings(load_settings())
+        if seeded:
+            log.info("seeded initial settings from environment: %s",
+                     ", ".join(sorted(seeded)))
+            store.log_event("info", "settings",
+                            "seeded from environment: %s" % ", ".join(sorted(seeded)))
     store.log_event("info", "app", "valetudo-restore %s started" % __version__)
     reschedule()
     scheduler.start()

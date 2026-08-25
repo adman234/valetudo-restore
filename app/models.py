@@ -61,6 +61,60 @@ class Settings(BaseModel):
         return f"{self.backup_cron_hour:02d}:{self.backup_cron_minute:02d}"
 
 
+# Environment variable -> settings field. These SEED the initial configuration
+# on first run only; once settings.json exists the web UI is authoritative, so
+# editing a setting in the UI is never silently undone by a stale env var.
+ENV_MAP = {
+    "VR_ROBOT_HOST": "robot_host",
+    "VR_ROBOT_PORT": "robot_port",
+    "VR_ROBOT_USER": "robot_user",
+    "VR_SSH_KEY_PATH": "ssh_key_path",
+    "VR_SSH_TIMEOUT": "ssh_timeout",
+    "VR_BACKUP_ENABLED": "backup_enabled",
+    "VR_BACKUP_HOUR": "backup_cron_hour",
+    "VR_BACKUP_MINUTE": "backup_cron_minute",
+    "VR_KEEP_BACKUPS": "keep_backups",
+    "VR_MONITOR_ENABLED": "monitor_enabled",
+    "VR_POLL_INTERVAL_MINUTES": "poll_interval_minutes",
+    "VR_CONFIRM_SAMPLES": "confirm_samples",
+    "VR_AUTO_RESTORE": "auto_restore",
+    "VR_MAX_RESTORE_ATTEMPTS": "max_restore_attempts",
+    "VR_RESTORE_WINDOW_HOURS": "restore_window_hours",
+    "VR_RESTORE_WIPE_GUARD": "restore_wipe_guard",
+    "VR_WEBHOOK_URL": "webhook_url",
+    "VR_WEBHOOK_HEADERS": "webhook_headers",
+    "VR_NOTIFY_ON_WIPE": "notify_on_wipe",
+    "VR_NOTIFY_ON_CRASH": "notify_on_crash",
+    "VR_NOTIFY_ON_RESTORE": "notify_on_restore",
+    "VR_NOTIFY_ON_BACKUP_FAILURE": "notify_on_backup_failure",
+    "VR_VALETUDO_ARCH": "valetudo_arch",
+    "VR_AUTO_DOWNLOAD_BINARY": "auto_download_binary",
+}
+
+_TRUE = ("1", "true", "yes", "on")
+
+
+def settings_from_env() -> dict:
+    """Read VR_* environment variables into a settings dict."""
+    defaults = Settings().model_dump()
+    out: dict = {}
+    for env_key, field in ENV_MAP.items():
+        raw = os.environ.get(env_key)
+        if raw is None or raw == "":
+            continue
+        default = defaults[field]
+        if isinstance(default, bool):
+            out[field] = raw.strip().lower() in _TRUE
+        elif isinstance(default, int):
+            try:
+                out[field] = int(raw)
+            except ValueError:
+                continue
+        else:
+            out[field] = raw
+    return out
+
+
 def load_settings() -> Settings:
     with _lock:
         if SETTINGS_FILE.exists():
@@ -74,7 +128,11 @@ def load_settings() -> Settings:
                     SETTINGS_FILE.replace(bad)
                 except OSError:
                     pass
-        return Settings()
+        # First run: seed from the environment.
+        try:
+            return Settings(**settings_from_env())
+        except Exception:
+            return Settings()
 
 
 def save_settings(s: Settings) -> None:

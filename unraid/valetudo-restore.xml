@@ -35,4 +35,19 @@
   <Config Name="TZ" Target="TZ" Default="Europe/London"
           Description="Timezone - controls when the nightly backup runs"
           Type="Variable" Display="always" Required="false" Mask="false">Europe/London</Config>
+  <Config Name="Robot IP" Target="VR_ROBOT_HOST" Default="192.168.1.100"
+          Description="Robot IP or hostname. Seeds the initial config; the web UI is authoritative afterwards."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Backup hour" Target="VR_BACKUP_HOUR" Default="2"
+          Description="Hour (0-23) for the nightly backup. Keep it before the robot's own 03:00-05:00 reboot."
+          Type="Variable" Display="advanced" Required="false" Mask="false">2</Config>
+  <Config Name="Backups to keep" Target="VR_KEEP_BACKUPS" Default="14"
+          Description="How many backup archives to retain before pruning the oldest."
+          Type="Variable" Display="advanced" Required="false" Mask="false">14</Config>
+  <Config Name="Auto-restore" Target="VR_AUTO_RESTORE" Default="false"
+          Description="Automatically restore when a wipe is CONFIRMED. Off by default - a restore writes to the robot."
+          Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Webhook URL" Target="VR_WEBHOOK_URL" Default=""
+          Description="Notification webhook (Home Assistant, ntfy, Discord...). Leave empty to disable notifications."
+          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 </Container>

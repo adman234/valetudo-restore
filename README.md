@@ -135,6 +135,90 @@ services:
 
 Then open `http://<host>:8095`.
 
+---
+
+## Environment variables
+
+**None of these are strictly required** — the container starts with working
+defaults and everything can be configured in the web UI. They exist so a
+deployment can be described entirely in a compose file or Unraid template.
+
+### Container paths and runtime
+
+These are the ones that genuinely matter for a container deployment. The two
+paths must point at persistent volumes or you lose your settings and backups on
+every restart.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VR_CONFIG_DIR` | `/config` | settings.json, event DB, SSH key, cached binary. **Mount a volume.** |
+| `VR_BACKUP_DIR` | `/backups` | where archives are written. **Mount a volume.** |
+| `VR_PORT` | `8080` | port inside the container |
+| `VR_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `TZ` | `UTC` | timezone — decides when the nightly backup actually runs |
+
+### Initial configuration (optional)
+
+These **seed the settings on first run only**. Once `settings.json` exists the
+web UI is authoritative, so a stale env var can never silently undo a change you
+made in the UI. To re-seed, delete `settings.json` from the config volume.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VR_ROBOT_HOST` | `192.168.50.117` | robot IP or hostname |
+| `VR_ROBOT_PORT` | `22` | SSH port |
+| `VR_ROBOT_USER` | `root` | SSH user |
+| `VR_SSH_KEY_PATH` | `/config/valetudo_key` | private key path inside the container |
+| `VR_SSH_TIMEOUT` | `10` | SSH connect timeout (seconds) |
+| `VR_BACKUP_ENABLED` | `true` | enable the nightly backup |
+| `VR_BACKUP_HOUR` | `2` | hour (0–23) |
+| `VR_BACKUP_MINUTE` | `30` | minute (0–59) |
+| `VR_KEEP_BACKUPS` | `14` | how many archives to retain |
+| `VR_MONITOR_ENABLED` | `true` | enable monitoring |
+| `VR_POLL_INTERVAL_MINUTES` | `5` | how often to poll |
+| `VR_CONFIRM_SAMPLES` | `2` | consecutive identical verdicts required before acting |
+| `VR_AUTO_RESTORE` | `false` | restore automatically on a confirmed wipe |
+| `VR_MAX_RESTORE_ATTEMPTS` | `3` | attempts allowed per window |
+| `VR_RESTORE_WINDOW_HOURS` | `6` | the window for the above |
+| `VR_RESTORE_WIPE_GUARD` | `true` | also reinstall the wipe-guard and boot hook |
+| `VR_WEBHOOK_URL` | *(empty)* | notification webhook; empty disables notifications |
+| `VR_WEBHOOK_HEADERS` | *(empty)* | extra headers as JSON, e.g. `{"Authorization":"Bearer x"}` |
+| `VR_NOTIFY_ON_WIPE` | `true` | notify when a wipe is detected |
+| `VR_NOTIFY_ON_CRASH` | `true` | notify when Valetudo has stopped |
+| `VR_NOTIFY_ON_RESTORE` | `true` | notify when a restore runs |
+| `VR_NOTIFY_ON_BACKUP_FAILURE` | `true` | notify when a backup fails |
+| `VR_VALETUDO_ARCH` | `aarch64` | `aarch64`, `armv7` or `amd64` |
+| `VR_AUTO_DOWNLOAD_BINARY` | `true` | fetch the release binary when needed |
+
+Booleans accept `1/true/yes/on` (case-insensitive); anything else is false.
+
+**The SSH key is not an environment variable.** Upload it through the UI, or
+place the file in the config volume yourself — putting a private key in an env
+var leaks it into `docker inspect`, process listings and Unraid's template XML.
+
+Fully-specified example:
+
+```yaml
+services:
+  valetudo-restore:
+    image: ghcr.io/adman234/valetudo-restore:latest
+    restart: unless-stopped
+    ports: ["8095:8080"]
+    volumes:
+      - ./config:/config
+      - ./backups:/backups
+    environment:
+      TZ: "Europe/London"
+      VR_ROBOT_HOST: "192.168.50.117"
+      VR_BACKUP_HOUR: "2"
+      VR_BACKUP_MINUTE: "30"
+      VR_KEEP_BACKUPS: "14"
+      VR_AUTO_RESTORE: "false"
+      VR_WEBHOOK_URL: "http://homeassistant:8123/api/webhook/valetudo"
+```
+
+---
+
 ## Setup
 
 1. **Upload your SSH key** (Settings → Upload SSH key). This is the key you use

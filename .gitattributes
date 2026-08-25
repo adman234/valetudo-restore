@@ -1,0 +1,9 @@
+# Force LF everywhere. Scripts and configs that end up on BusyBox devices break
+# silently with CRLF: ash fails with `syntax error: unexpected end of file
+# (expecting "then")` and the script simply never runs.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gz  binary
+*.tgz binary
