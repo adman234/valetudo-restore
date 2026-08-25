@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block body %}
+{% if request.query_params.get('saved') %}
+<div class="banner ok">Settings saved.</div>
+{% endif %}
+
+<form method="post" action="/settings" class="panel">
+  <h2>Robot connection</h2>
+  <div class="grid">
+    <label>Host <input name="robot_host" value="{{ s.robot_host }}" required></label>
+    <label>Port <input name="robot_port" type="number" value="{{ s.robot_port }}"></label>
+    <label>User <input name="robot_user" value="{{ s.robot_user }}"></label>
+    <label>SSH timeout (s) <input name="ssh_timeout" type="number" value="{{ s.ssh_timeout }}"></label>
+    <label class="wide">SSH key path <input name="ssh_key_path" value="{{ s.ssh_key_path }}"></label>
+  </div>
+  <p class="hint">
+    The key must be a private key file readable by the container. Key-only auth
+    is used; passwords are never accepted or stored.
+  </p>
+
+  <h2>Backups</h2>
+  <div class="grid">
+    <label class="check"><input type="checkbox" name="backup_enabled" {% if s.backup_enabled %}checked{% endif %}> Nightly backup enabled</label>
+    <label>Hour <input name="backup_cron_hour" type="number" min="0" max="23" value="{{ s.backup_cron_hour }}"></label>
+    <label>Minute <input name="backup_cron_minute" type="number" min="0" max="59" value="{{ s.backup_cron_minute }}"></label>
+    <label>Keep backups <input name="keep_backups" type="number" min="1" max="365" value="{{ s.keep_backups }}"></label>
+  </div>
+  <p class="hint">
+    Schedule the backup <em>before</em> the robot's own nightly reboot (03:00&ndash;05:00
+    on Dreame firmware), so a wipe during that reboot is captured with fresh data.
+  </p>
+
+  <h2>Monitoring</h2>
+  <div class="grid">
+    <label class="check"><input type="checkbox" name="monitor_enabled" {% if s.monitor_enabled %}checked{% endif %}> Monitoring enabled</label>
+    <label>Poll every (min) <input name="poll_interval_minutes" type="number" min="1" max="120" value="{{ s.poll_interval_minutes }}"></label>
+    <label>Confirm samples <input name="confirm_samples" type="number" min="1" max="10" value="{{ s.confirm_samples }}"></label>
+  </div>
+  <p class="hint">
+    <strong>Confirm samples</strong> is how many consecutive identical readings are
+    required before acting. A single sample is noisy &mdash; wifi roaming and reboots
+    both look like an outage for one poll.
+  </p>
+
+  <h2>Recovery</h2>
+  <div class="grid">
+    <label class="check"><input type="checkbox" name="auto_restore" {% if s.auto_restore %}checked{% endif %}> Auto-restore when a wipe is detected</label>
+    <label class="check"><input type="checkbox" name="restore_wipe_guard" {% if s.restore_wipe_guard %}checked{% endif %}> Reinstall wipe-guard + boot hook</label>
+    <label>Max attempts <input name="max_restore_attempts" type="number" min="1" max="10" value="{{ s.max_restore_attempts }}"></label>
+    <label>Per window (h) <input name="restore_window_hours" type="number" min="1" max="168" value="{{ s.restore_window_hours }}"></label>
+  </div>
+  <p class="hint danger-hint">
+    Auto-restore writes to the robot. It only ever triggers on a
+    <em>confirmed</em> state where SSH succeeded and the binary was observed
+    missing &mdash; never on an unreachable robot.
+  </p>
+
+  <h2>Notifications</h2>
+  <div class="grid">
+    <label class="check"><input type="checkbox" name="notify_on_wipe" {% if s.notify_on_wipe %}checked{% endif %}> On wipe detected</label>
+    <label class="check"><input type="checkbox" name="notify_on_crash" {% if s.notify_on_crash %}checked{% endif %}> On Valetudo crash</label>
+    <label class="check"><input type="checkbox" name="notify_on_restore" {% if s.notify_on_restore %}checked{% endif %}> On restore performed</label>
+    <label class="check"><input type="checkbox" name="notify_on_backup_failure" {% if s.notify_on_backup_failure %}checked{% endif %}> On backup failure</label>
+    <label class="wide">Webhook URL <input name="webhook_url" value="{{ s.webhook_url }}" placeholder="http://homeassistant:8123/api/webhook/valetudo"></label>
+    <label class="wide">Extra headers (JSON) <input name="webhook_headers" value="{{ s.webhook_headers }}" placeholder='{"Authorization": "Bearer ..."}'></label>
+  </div>
+
+  <h2>Valetudo binary</h2>
+  <div class="grid">
+    <label>Architecture
+      <select name="valetudo_arch">
+        {% for a in ['aarch64', 'armv7', 'amd64'] %}
+        <option value="{{ a }}" {% if s.valetudo_arch == a %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="auto_download_binary" {% if s.auto_download_binary %}checked{% endif %}> Download automatically when needed</label>
+  </div>
+
+  <div class="actions"><button type="submit" class="primary">Save settings</button></div>
+</form>
+
+<section class="panel">
+  <h2>Upload SSH key</h2>
+  <p class="hint">Stored at <code>{{ s.ssh_key_path }}</code> with mode 0600.</p>
+  <form id="keyform" enctype="multipart/form-data">
+    <input type="file" name="file" required>
+    <button type="submit">Upload</button>
+  </form>
+  <pre id="keyout" class="out" hidden></pre>
+</section>
+{% endblock %}

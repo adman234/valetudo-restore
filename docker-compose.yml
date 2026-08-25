@@ -1,0 +1,13 @@
+services:
+  valetudo-restore:
+    build: .
+    image: ghcr.io/adman234/valetudo-restore:latest
+    container_name: valetudo-restore
+    restart: unless-stopped
+    ports:
+      - "8095:8080"
+    volumes:
+      - ./config:/config
+      - ./backups:/backups
+    environment:
+      TZ: "Europe/London"

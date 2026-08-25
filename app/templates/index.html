@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block body %}
+
+{% set st = monitor.get('state') or 'UNKNOWN' %}
+<section class="cards">
+  <div class="card status {{ st|lower }}">
+    <h2>Robot</h2>
+    <div class="big">{{ st }}</div>
+    <div class="sub">
+      {{ s.robot_host }}
+      {% if monitor.get('streak') %}&middot; {{ monitor.streak }}x{% endif %}
+    </div>
+    {% if monitor.get('error') %}<div class="err">{{ monitor.error }}</div>{% endif %}
+    <div class="sub">checked {{ monitor.get('ts', 0)|ts }}</div>
+  </div>
+
+  <div class="card">
+    <h2>Last backup</h2>
+    <div class="big small">{{ last_backup_ok|ts }}</div>
+    <div class="sub">{{ backups|length }} kept &middot; retention {{ s.keep_backups }}</div>
+    <div class="sub">next at {{ s.cron_summary() }} {% if not s.backup_enabled %}(disabled){% endif %}</div>
+  </div>
+
+  <div class="card">
+    <h2>Recovery</h2>
+    <div class="big small">{{ "AUTO" if s.auto_restore else "MANUAL" }}</div>
+    <div class="sub">
+      {% if s.auto_restore %}
+        max {{ s.max_restore_attempts }} per {{ s.restore_window_hours }}h
+      {% else %}
+        auto-restore is off
+      {% endif %}
+    </div>
+    {% if last_restore.get('ts') %}
+      <div class="sub">last: {{ last_restore.ts|ts }}</div>
+    {% endif %}
+  </div>
+</section>
+
+{% if not key_present %}
+<div class="banner warn">
+  <strong>No SSH key at <code>{{ s.ssh_key_path }}</code>.</strong>
+  Nothing can be backed up or restored until the key is in place &mdash;
+  upload it in <a href="/settings">Settings</a>. Note that monitoring will
+  report <code>NO_SSH</code> rather than guessing.
+</div>
+{% endif %}
+{% if not binary_cached %}
+<div class="banner">
+  Valetudo binary not cached yet.
+  <button class="link" data-post="/api/download-binary">Download it now</button>
+  so a restore works even if GitHub is unreachable later.
+</div>
+{% endif %}
+
+<section class="panel">
+  <h2>Actions</h2>
+  <div class="actions">
+    <button data-post="/api/test-connection" data-out="#out">Test connection</button>
+    <button data-post="/api/backup" data-out="#out" data-confirm="Run a backup now?">Back up now</button>
+    <button data-post="/api/monitor-tick" data-out="#out">Check now</button>
+    <button class="danger" data-post="/api/restore" data-out="#out"
+            data-confirm="Restore the newest backup onto the robot? This overwrites /data/valetudo and its config.">
+      Restore newest
+    </button>
+  </div>
+  <pre id="out" class="out" hidden></pre>
+</section>
+
+<section class="panel">
+  <h2>Backups</h2>
+  {% if backups %}
+  <table>
+    <thead><tr><th>When</th><th>File</th><th>Size</th><th>Kind</th><th></th></tr></thead>
+    <tbody>
+    {% for b in backups %}
+      <tr>
+        <td>{{ b.ts|ts }}</td>
+        <td class="mono">{{ b.filename }}</td>
+        <td>{{ b.size|size }}</td>
+        <td>{{ b.kind }}{% if b.note %} <span class="dim">({{ b.note }})</span>{% endif %}</td>
+        <td class="right">
+          <a href="/api/backups/{{ b.filename }}">download</a>
+          <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
+                  data-confirm="Restore {{ b.filename }} onto the robot?">restore</button>
+          <button class="link danger" data-post="/api/backups/{{ b.filename }}/delete"
+                  data-confirm="Delete {{ b.filename }}?">delete</button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="dim">No backups yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Recent events</h2>
+  <table class="events">
+    <tbody>
+    {% for e in events %}
+      <tr class="lvl-{{ e.level }}">
+        <td class="mono nowrap">{{ e.ts|ts }}</td>
+        <td class="nowrap">{{ e.kind }}</td>
+        <td>{{ e.message }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="dim">Nothing logged yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

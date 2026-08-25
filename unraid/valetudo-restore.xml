@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>valetudo-restore</Name>
+  <Repository>ghcr.io/adman234/valetudo-restore:latest</Repository>
+  <Registry>https://ghcr.io/adman234/valetudo-restore</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/adman234/valetudo-restore/issues</Support>
+  <Project>https://github.com/adman234/valetudo-restore</Project>
+  <Overview>
+    Backup, monitoring and automatic restore for Valetudo on rooted Dreame/Mova
+    robots. These robots periodically factory-reset themselves and wipe /data,
+    destroying Valetudo along with its config, map and Wi-Fi settings.
+    This container takes nightly SSH backups of everything irreplaceable
+    (including the per-robot calibration and identity data), watches for a wipe,
+    notifies you, and can put it all back automatically.
+  </Overview>
+  <Category>HomeAutomation: Tools:Backup</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/Hypfer/Valetudo/master/assets/logo/valetudo_logo_with_name.svg</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <DonateText/>
+  <DonateLink/>
+  <Config Name="WebUI Port" Target="8080" Default="8095" Mode="tcp"
+          Description="Port for the valetudo-restore web interface"
+          Type="Port" Display="always" Required="true" Mask="false">8095</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/valetudo-restore"
+          Description="Settings, event database, SSH key and the cached Valetudo binary"
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/valetudo-restore</Config>
+  <Config Name="Backups" Target="/backups" Default="/mnt/user/backups/valetudo"
+          Description="Where backup archives are written"
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups/valetudo</Config>
+  <Config Name="TZ" Target="TZ" Default="Europe/London"
+          Description="Timezone - controls when the nightly backup runs"
+          Type="Variable" Display="always" Required="false" Mask="false">Europe/London</Config>
+</Container>
