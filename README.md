@@ -50,8 +50,79 @@ The mark is cleared in exactly one place: the 03:00 cron job
 responsive at that moment. If it is busy or unhealthy then, the mark survives
 indefinitely — which is why wipes look random.
 
-**You cannot patch this.** The rootfs is a read-only squashfs. All you can do
-is keep good backups, notice quickly, and put things back. Hence this tool.
+**You cannot patch this.** The rootfs is a read-only squashfs, so
+`monitor.sh` and `factory_reset.sh` cannot be edited.
+
+You can, however, make the firmware unable to reach the wipe. See below.
+
+---
+
+## Preventing the wipe entirely
+
+Two properties of the firmware's own logic can be turned against it. Both were
+verified on a real r2416 by running a *neutered* copy of `factory_reset.sh` with
+every destructive command replaced by an echo.
+
+### 1. Hold the mark as a directory (recommended)
+
+`monitor.sh` decides between rebooting and wiping with:
+
+```sh
+if [ ! -f ${SYS_AUTO_REBOOT} ]; then   # /data/sys_auto_reboot.mark
+    touch ${SYS_AUTO_REBOOT}; reboot   # strike 1
+else
+    /usr/bin/factory_reset.sh monitor_rescue_brick   # strike 2 - the wipe
+fi
+```
+
+`-f` tests for a *regular file*. If the mark is a **directory**, that test is
+false forever, so the firmware always takes the reboot branch and never calls
+`factory_reset.sh` at all:
+
+```sh
+rm -f /data/sys_auto_reboot.mark
+mkdir -p /data/sys_auto_reboot.mark
+```
+
+This holds because `touch` on a directory merely updates its mtime rather than
+replacing it, and `rm -f` on a directory fails — so the mark survives both the
+firmware's `touch` and the nightly `check_restart_ava.sh` cleanup. A crash storm
+now costs reboots instead of your data.
+
+Note this is strictly better than racing to *delete* the mark, which is what
+earlier guards did. That race is unwinnable: after a strike-1 reboot the
+firmware can reach strike 2 in about 3–5 minutes, so a guard waiting for a
+"settled" system is asleep for exactly the window that matters.
+
+### 2. Hold the entry mutex (belt-and-braces, off by default)
+
+`factory_reset.sh` refuses to run if its own mutex already exists:
+
+```sh
+if [ -f ${FACTORY_RESET} ]; then     # /tmp/factory_reset.txt
+	log "factory reset is running"
+	exit 1
+```
+
+Pre-creating that file makes the script exit `1` before any destructive action,
+blocking **every** caller — `monitor_rescue_brick`, `monitor_disk_full`, and the
+physical reset button. Nothing else on the system reads or writes that path, so
+it has no other side effects. `/tmp` is tmpfs, so it must be recreated at boot.
+
+This is off by default precisely because it also disables deliberate factory
+resets. Enable it by creating `/data/_wipe_guard.block_all`.
+
+### Trade-off
+
+Blocking the wipe means a genuinely broken `ava` reboot-loops instead of being
+"repaired" by a reset. That is usually what you want — a reboot loop is visible
+and recoverable, whereas a wipe destroys Valetudo, the map and the Wi-Fi config
+and does not necessarily fix anything. Keep backups regardless.
+
+---
+
+Even with the wipe blocked, keep good backups, notice quickly, and be able to
+put things back. Hence this tool.
 
 ---
 
