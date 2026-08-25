@@ -271,13 +271,88 @@ Safety properties:
 * **reboot the robot afterwards** — `ava` holds the map files open and will not
   pick up changes made underneath it
 
-### Testing notifications
+### Manual controls
 
-Settings → **Send test notification** posts a payload with `"event": "test"` and
-reports the HTTP status rather than a bare success/failure. That matters because
-Home Assistant answers `404` for a webhook id that does not exist — the most
-common misconfiguration, and indistinguishable from silence otherwise. The test
-uses *saved* settings, so save before testing.
+The dashboard has three controls Valetudo's own UI does not offer:
+
+| Button | What it does |
+|---|---|
+| **Restart Valetudo** | stops and relaunches just the Valetudo process |
+| **Reboot robot** | reboots the whole machine — do this after restoring a map |
+| **Restore map only** | see above |
+
+Restart always relaunches with `VALETUDO_CONFIG_PATH` set. Restarting it by hand
+without that variable silently moves the config to tmpfs, and every setting is
+lost at the next reboot.
+
+---
+
+## Notifications
+
+Notifications are sent as a JSON `POST` to the webhook URL:
+
+```json
+{
+  "source": "valetudo-restore",
+  "event": "wiped",
+  "message": "Valetudo binary is gone - /data was wiped",
+  "robot": "192.168.50.117",
+  "ts": 1787680000,
+  "detail": {}
+}
+```
+
+`event` is one of:
+
+| Event | Sent when |
+|---|---|
+| `test` | you press **Send test notification** |
+| `wiped` | a confirmed wipe: SSH ok, binary observed missing |
+| `wipe_detected` | a new line appeared in the robot's `factory_reset.log` |
+| `crashed` | Valetudo is installed but not running |
+| `restored` | a restore completed |
+| `restore_failed` | a restore failed |
+| `backup_failed` | a backup failed |
+
+### Testing it
+
+Settings → **Send test notification** reports the **HTTP status** rather than a
+bare success/failure. That matters: Home Assistant answers `404` for a webhook
+id that does not exist — the most common misconfiguration, and indistinguishable
+from silence otherwise. The test uses *saved* settings, so save first.
+
+### Home Assistant setup
+
+Create an automation with a **Webhook** trigger, note its id, then set the
+webhook URL to `http://<ha-host>:8123/api/webhook/<your-id>`.
+
+```yaml
+alias: Valetudo alert
+trigger:
+  - platform: webhook
+    webhook_id: valetudo
+    allowed_methods: [POST]
+    local_only: true
+action:
+  - service: notify.mobile_app_yourphone
+    data:
+      title: "Valetudo: {{ trigger.json.event }}"
+      message: "{{ trigger.json.message }}"
+```
+
+`local_only: true` keeps the webhook reachable only from your LAN, which is what
+you want — the endpoint is unauthenticated.
+
+To alert only on the states that actually need you, filter on the event:
+
+```yaml
+condition:
+  - condition: template
+    value_template: "{{ trigger.json.event in ['wiped', 'wipe_detected', 'restore_failed', 'backup_failed'] }}"
+```
+
+Other targets work the same way — ntfy, Gotify and Discord all accept a JSON
+POST; use **Extra headers** for anything needing an auth token.
 
 ## Notes from the field
 

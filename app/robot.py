@@ -288,3 +288,28 @@ class RobotClient:
         self.run(
             "[ -x %s ] && setsid %s >/dev/null 2>&1 </dev/null &" % (P_GUARD, P_GUARD)
         )
+
+    def stop_valetudo(self, timeout: int = 15) -> bool:
+        """SIGTERM Valetudo and wait for it to actually exit."""
+        rc, out, _ = self.run("pidof valetudo")
+        if rc != 0 or not out.strip():
+            return True  # already stopped
+        self.run("kill %s" % out.strip())
+        for _ in range(timeout):
+            rc, out, _ = self.run("pidof valetudo")
+            if rc != 0 or not out.strip():
+                return True
+            self.run("sleep 1")
+        # last resort
+        self.run("killall -9 valetudo")
+        rc, out, _ = self.run("pidof valetudo")
+        return rc != 0 or not out.strip()
+
+    def reboot(self) -> None:
+        """
+        Reboot the robot.
+
+        `sync` first, and detach the reboot so the ssh channel closing does not
+        race the shutdown.
+        """
+        self.run("sync; (sleep 1; reboot) >/dev/null 2>&1 &")

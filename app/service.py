@@ -384,6 +384,74 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
 # --------------------------------------------------------------------------
 # monitoring
 # --------------------------------------------------------------------------
+def restart_valetudo() -> dict:
+    """
+    Stop and restart the Valetudo process on the robot.
+
+    Valetudo's own web UI has no restart control, and the robot has no service
+    manager, so this stops the process and relaunches it the same way the boot
+    hook does - crucially with VALETUDO_CONFIG_PATH set. Restarting it without
+    that env var would silently move its config to tmpfs, and every setting
+    would vanish at the next reboot.
+    """
+    s = load_settings()
+    steps: list[str] = []
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            if not p.binary_present:
+                return {"ok": False,
+                        "error": "/data/valetudo is missing - the robot was wiped. "
+                                 "Use Restore, not Restart."}
+            steps.append("was running" if p.valetudo_running else "was not running")
+            if p.valetudo_running and not c.stop_valetudo():
+                raise IOError("Valetudo would not stop")
+            steps.append("stopped")
+            c.start_valetudo()
+            steps.append("started with VALETUDO_CONFIG_PATH=%s" % R.P_CONFIG)
+
+            # confirm it actually came back rather than assuming
+            back = False
+            for _ in range(20):
+                c.run("sleep 1")
+                rc, out, _ = c.run("pidof valetudo")
+                if rc == 0 and out.strip():
+                    back = True
+                    break
+            steps.append("running (pid %s)" % out.strip() if back
+                         else "did NOT come back")
+        store.log_event("info" if back else "error", "restart",
+                        "Valetudo restart: %s" % ("ok" if back else "FAILED"), steps)
+        return {"ok": back, "steps": steps,
+                "note": None if back else
+                        "Valetudo did not restart. Check the binary and config."}
+    except Exception as e:
+        log.exception("restart failed")
+        store.log_event("error", "restart", "restart FAILED: %s" % e, steps)
+        return {"ok": False, "error": str(e), "steps": steps}
+
+
+def reboot_robot() -> dict:
+    """Reboot the whole robot (not just Valetudo)."""
+    s = load_settings()
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            c.reboot()
+        store.log_event("info", "reboot", "robot reboot requested")
+        return {"ok": True,
+                "note": "Reboot requested. The robot takes roughly 2-4 minutes to "
+                        "come back; monitoring will report OFFLINE/NO_SSH until "
+                        "then, which is expected and will not trigger a restore."}
+    except Exception as e:
+        store.log_event("error", "reboot", "reboot FAILED: %s" % e)
+        return {"ok": False, "error": str(e)}
+
+
 def extract_map_archive(blob: bytes) -> bytes:
     """
     Accept either a full valetudo-restore backup or a bare map tarball and

@@ -239,6 +239,16 @@ async def api_upload_key(file: UploadFile = File(...)):
     return {"ok": True, "path": str(dest), "bytes": len(data)}
 
 
+@app.post("/api/restart-valetudo")
+def api_restart_valetudo():
+    return service.restart_valetudo()
+
+
+@app.post("/api/reboot-robot")
+def api_reboot_robot():
+    return service.reboot_robot()
+
+
 @app.post("/api/test-webhook")
 def api_test_webhook():
     return service.test_webhook()

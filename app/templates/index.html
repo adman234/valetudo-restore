@@ -59,11 +59,26 @@
     <button data-post="/api/test-connection" data-out="#out">Test connection</button>
     <button data-post="/api/backup" data-out="#out" data-confirm="Run a backup now?">Back up now</button>
     <button data-post="/api/monitor-tick" data-out="#out">Check now</button>
+    <button data-post="/api/restart-valetudo" data-out="#out"
+            data-confirm="Restart the Valetudo process on the robot? The web UI and Home Assistant will drop for a few seconds.">
+      Restart Valetudo
+    </button>
+    <button class="danger" data-post="/api/reboot-robot" data-out="#out"
+            data-confirm="Reboot the whole robot? It will be offline for 2-4 minutes.">
+      Reboot robot
+    </button>
     <button class="danger" data-post="/api/restore" data-out="#out"
             data-confirm="Restore the newest backup onto the robot? This overwrites /data/valetudo and its config.">
       Restore newest
     </button>
   </div>
+  <p class="hint">
+    <strong>Restart Valetudo</strong> stops and relaunches just the Valetudo
+    process &mdash; its own web UI has no restart control. It always relaunches
+    with <code>VALETUDO_CONFIG_PATH</code> set, so your settings stay on
+    persistent storage. <strong>Reboot robot</strong> restarts the whole machine,
+    which is what you want after restoring a map.
+  </p>
   <pre id="out" class="out" hidden></pre>
 </section>
 
