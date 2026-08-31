@@ -354,6 +354,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
             voice = member("personalized_voice.tar.gz")
             dust = member("duststreamer")
             vendor_cfg = member("data_config.tar.gz")
+            map_have, map_vendor, map_missing = _read_map_members(tar)
 
             with _client(s) as c:
                 probe = c.probe()
@@ -450,6 +451,33 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     steps.append("boot hook rebuilt from /misc template")
                 except Exception as e:
                     steps.append("boot hook rebuild FAILED: %s" % e)
+
+                # 4b. The map, and the ava restart that makes everything above
+                # take effect. ava reads /data/config/ava at STARTUP and holds
+                # the values in memory, so writing clean_parameter.json under a
+                # running ava changes the file but not the robot - pet
+                # avoidance, obstacle images and the rest stayed at their old
+                # values until it restarted. Stopping ava here does double duty:
+                # it is required for the map swap anyway.
+                if map_have and "data_map.tar.gz" in map_have and not map_missing:
+                    c.stop_map_processes()
+                    steps.append("stopped ava + miio_client")
+                    try:
+                        _swap_map_paths(c, map_have, map_vendor, steps)
+                    finally:
+                        c.start_map_processes()
+                        steps.append("restarted ava + miio_client (settings now applied)")
+                elif map_have:
+                    steps.append("map NOT restored: archive is missing %s"
+                                 % ", ".join(map_missing))
+                    # still restart ava so the vendor settings take effect
+                    c.stop_map_processes()
+                    c.start_map_processes()
+                    steps.append("restarted ava + miio_client (settings now applied)")
+                else:
+                    c.stop_map_processes()
+                    c.start_map_processes()
+                    steps.append("restarted ava + miio_client (settings now applied)")
 
                 # 5. start - stop any existing instance FIRST. Starting
                 # unconditionally leaves the old process running: the newcomer
@@ -560,6 +588,61 @@ def reboot_robot() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def _swap_map_paths(c, have, vendor_map, steps) -> str:
+    """
+    Replace the map paths on the robot. ava and miio_client MUST already be
+    stopped by the caller - with ava running it holds the map open and rewrites
+    or discards whatever is placed there.
+
+    Returns the quarantine directory the previous map was moved to.
+    """
+    stamp = _stamp()
+    quarantine = "/data/_map_replaced-%s" % stamp
+    c.run("mkdir -p %s" % quarantine)
+    # keep only the two most recent; /data filling up is itself a wipe trigger
+    c.run("ls -d /data/_map_replaced-* 2>/dev/null | head -n -2 | xargs -r rm -rf")
+
+    for member, (remote, data, is_dir) in have.items():
+        c.run("chattr -R -i %s 2>/dev/null" % R._q(remote))
+        c.run("[ -e %s ] && mv %s %s/ 2>/dev/null"
+              % (R._q(remote), R._q(remote), quarantine))
+        if is_dir:
+            c.run("mkdir -p %s" % R._q(remote))
+            c.write_file("/tmp/_vr_m.tgz", data)
+            rc, _, err = c.run(
+                "tar -xzf /tmp/_vr_m.tgz -C %s && rm -f /tmp/_vr_m.tgz"
+                % R._q(remote), timeout=180)
+            steps.append("%s restored (%d bytes)" % (remote, len(data))
+                         if rc == 0 else "%s FAILED: %s" % (remote, err.strip()))
+        else:
+            c.write_file(remote, data)
+            steps.append("%s restored (%d bytes)" % (remote, len(data)))
+
+    if vendor_map:
+        c.write_file("/data/config/ava/mult_map.json", vendor_map)
+        steps.append("mult_map.json restored")
+    return quarantine
+
+
+def _read_map_members(tar):
+    """Pull the map components + mult_map.json out of an open backup archive."""
+    names = set(tar.getnames())
+    have = {}
+    for remote, member, is_dir in R.MAP_PATHS:
+        if member in names:
+            have[member] = (remote, tar.extractfile(member).read(), is_dir)
+    vendor_map = None
+    if "data_config.tar.gz" in names:
+        cfg = tar.extractfile("data_config.tar.gz").read()
+        with tarfile.open(fileobj=io.BytesIO(cfg)) as inner:
+            try:
+                vendor_map = inner.extractfile("./ava/mult_map.json").read()
+            except Exception:
+                vendor_map = None
+    missing = [m for _, m, _ in R.MAP_PATHS if m not in have]
+    return have, vendor_map, missing
+
+
 def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
                 force: bool = False) -> dict:
     """
@@ -598,30 +681,12 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
 
     try:
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
-            names = set(tar.getnames())
-            have = {}
-            for remote, member, is_dir in R.MAP_PATHS:
-                if member in names:
-                    have[member] = (remote, tar.extractfile(member).read(), is_dir)
-            vendor_map = None
-            if "data_config.tar.gz" in names:
-                cfg = tar.extractfile("data_config.tar.gz").read()
-                with tarfile.open(fileobj=io.BytesIO(cfg)) as inner:
-                    try:
-                        vendor_map = inner.extractfile("./ava/mult_map.json").read()
-                    except Exception:
-                        vendor_map = None
+            have, vendor_map, missing = _read_map_members(tar)
 
         if "data_map.tar.gz" not in have:
             raise ValueError(
                 "This archive contains no map data. Only backup archives "
                 "produced by this tool can be restored.")
-
-        # Refuse an incomplete archive rather than producing a map ava will
-        # reject. Archives taken before the full map set was understood have
-        # /data/map but not /data/ri or /data/DivideMap; restoring those looks
-        # like it works and then the map silently vanishes on the next boot.
-        missing = [m for _, m, _ in R.MAP_PATHS if m not in have]
         if missing and not force:
             return {
                 "ok": False,
@@ -640,38 +705,10 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
             probe = c.probe()
             if not probe.ssh_ok:
                 raise R.RobotUnreachable(probe.error or "probe failed")
-
-            stamp = _stamp()
-            quarantine = "/data/_map_replaced-%s" % stamp
-            c.run("mkdir -p %s" % quarantine)
-            # Keep only the two most recent replaced maps; these are a few MB
-            # each and /data filling up is itself a factory-reset trigger.
-            c.run("ls -d /data/_map_replaced-* 2>/dev/null | head -n -2 "
-                  "| xargs -r rm -rf")
-
             c.stop_map_processes()
             steps.append("stopped ava + miio_client")
             try:
-                for member, (remote, data, is_dir) in have.items():
-                    c.run("chattr -R -i %s 2>/dev/null" % R._q(remote))
-                    c.run("[ -e %s ] && mv %s %s/ 2>/dev/null"
-                          % (R._q(remote), R._q(remote), quarantine))
-                    if is_dir:
-                        c.run("mkdir -p %s" % R._q(remote))
-                        c.write_file("/tmp/_vr_m.tgz", data)
-                        rc, _, err = c.run(
-                            "tar -xzf /tmp/_vr_m.tgz -C %s && rm -f /tmp/_vr_m.tgz"
-                            % R._q(remote), timeout=180)
-                        steps.append("%s restored (%d bytes)" % (remote, len(data))
-                                     if rc == 0 else
-                                     "%s FAILED: %s" % (remote, err.strip()))
-                    else:
-                        c.write_file(remote, data)
-                        steps.append("%s restored (%d bytes)" % (remote, len(data)))
-
-                if vendor_map:
-                    c.write_file("/data/config/ava/mult_map.json", vendor_map)
-                    steps.append("mult_map.json restored")
+                quarantine = _swap_map_paths(c, have, vendor_map, steps)
             finally:
                 c.start_map_processes()
                 steps.append("restarted ava + miio_client")
