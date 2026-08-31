@@ -519,14 +519,21 @@ def extract_map_archive(blob: bytes) -> bytes:
 def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
                 also_vendor_config: bool = False) -> dict:
     """
-    Push /data/map back onto the robot.
+    Restore a complete map, the way pkoehlers/maploader does it.
 
-    Deliberately conservative:
-      * the robot's existing map is copied aside first, so this is reversible
-      * /mnt/private is never written - that is factory identity data and
-        corrupting it can brick the robot
-      * a reboot is recommended afterwards, because `ava` holds the map open and
-        will not pick up files changed underneath it
+    A map is NOT just /data/map. For this model (r2491 / Mova P10 Pro Ultra) it
+    is /data/ri + /data/map + /data/DivideMap + /data/config/ava/mult_map.json,
+    and the sibling r2416 profile adds /data/DivideDebug and
+    /data/log/map_info.bin. Restoring only /data/map leaves an incomplete map
+    that ava discards on the next boot - which is exactly what happened
+    repeatedly before this was understood.
+
+    ava and miio_client are stopped for the swap rather than rebooting: with ava
+    running it holds the map open and rewrites or discards whatever is placed
+    there.
+
+    /data/config/miio is never touched (wifi + device identity), nor
+    /mnt/private.
     """
     s = load_settings()
     steps: list[str] = []
@@ -546,17 +553,27 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
         steps.append("source: uploaded file (%d bytes)" % len(blob))
 
     try:
-        map_tar = extract_map_archive(blob)
-        steps.append("map archive extracted (%d bytes)" % len(map_tar))
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+            names = set(tar.getnames())
+            have = {}
+            for remote, member, is_dir in R.MAP_PATHS:
+                if member in names:
+                    have[member] = (remote, tar.extractfile(member).read(), is_dir)
+            vendor_map = None
+            if "data_config.tar.gz" in names:
+                cfg = tar.extractfile("data_config.tar.gz").read()
+                with tarfile.open(fileobj=io.BytesIO(cfg)) as inner:
+                    try:
+                        vendor_map = inner.extractfile("./ava/mult_map.json").read()
+                    except Exception:
+                        vendor_map = None
 
-        vendor_tar = None
-        if also_vendor_config:
-            try:
-                with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
-                    f = t.extractfile("data_config.tar.gz")
-                    vendor_tar = f.read() if f else None
-            except Exception:
-                vendor_tar = None
+        if "data_map.tar.gz" not in have:
+            raise ValueError("this archive has no map data")
+        missing = [m for _, m, _ in R.MAP_PATHS if m not in have]
+        if missing:
+            steps.append("NOTE: archive predates full map capture; missing %s"
+                         % ", ".join(missing))
 
         with _client(s) as c:
             probe = c.probe()
@@ -564,37 +581,40 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
                 raise R.RobotUnreachable(probe.error or "probe failed")
 
             stamp = _stamp()
-            # reversible: keep the current map aside before overwriting
-            c.run("[ -d /data/map ] && cp -a /data/map /data/map.bak-%s" % stamp,
-                  timeout=120)
-            steps.append("existing map copied to /data/map.bak-%s" % stamp)
+            quarantine = "/data/_map_replaced-%s" % stamp
+            c.run("mkdir -p %s" % quarantine)
 
-            c.write_file("/tmp/_vr_map.tgz", map_tar)
-            rc, _, err = c.run(
-                "rm -rf /data/map && mkdir -p /data/map && "
-                "tar -xzf /tmp/_vr_map.tgz -C /data/map && rm -f /tmp/_vr_map.tgz",
-                timeout=180)
-            if rc != 0:
-                raise IOError("extract failed on robot: %s" % err.strip())
-            rc, out, _ = c.run("ls /data/map | wc -l")
-            steps.append("map restored (%s entries in /data/map)" % out.strip())
+            c.stop_map_processes()
+            steps.append("stopped ava + miio_client")
+            try:
+                for member, (remote, data, is_dir) in have.items():
+                    c.run("chattr -R -i %s 2>/dev/null" % R._q(remote))
+                    c.run("[ -e %s ] && mv %s %s/ 2>/dev/null"
+                          % (R._q(remote), R._q(remote), quarantine))
+                    if is_dir:
+                        c.run("mkdir -p %s" % R._q(remote))
+                        c.write_file("/tmp/_vr_m.tgz", data)
+                        rc, _, err = c.run(
+                            "tar -xzf /tmp/_vr_m.tgz -C %s && rm -f /tmp/_vr_m.tgz"
+                            % R._q(remote), timeout=180)
+                        steps.append("%s restored (%d bytes)" % (remote, len(data))
+                                     if rc == 0 else
+                                     "%s FAILED: %s" % (remote, err.strip()))
+                    else:
+                        c.write_file(remote, data)
+                        steps.append("%s restored (%d bytes)" % (remote, len(data)))
 
-            if vendor_tar:
-                c.write_file("/tmp/_vr_cfg.tgz", vendor_tar)
-                rc, _, err = c.run(
-                    "tar -xzf /tmp/_vr_cfg.tgz -C /data/config && rm -f /tmp/_vr_cfg.tgz",
-                    timeout=180)
-                steps.append("vendor config restored"
-                             if rc == 0 else "vendor config FAILED: %s" % err.strip())
+                if vendor_map:
+                    c.write_file("/data/config/ava/mult_map.json", vendor_map)
+                    steps.append("mult_map.json restored")
+            finally:
+                c.start_map_processes()
+                steps.append("restarted ava + miio_client")
 
         store.log_event("info", "restore-map", "map restored", steps)
-        return {
-            "ok": True,
-            "steps": steps,
-            "note": "Reboot the robot for ava to pick up the new map - it holds "
-                    "the map files open and may otherwise overwrite them. The "
-                    "previous map is kept at /data/map.bak-%s." % stamp,
-        }
+        return {"ok": True, "steps": steps,
+                "note": "Previous map moved to %s on the robot. Give ava a minute, "
+                        "then check the map in Valetudo." % quarantine}
     except Exception as e:
         log.exception("map restore failed")
         store.log_event("error", "restore-map", "map restore FAILED: %s" % e, steps)

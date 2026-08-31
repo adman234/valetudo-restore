@@ -40,6 +40,26 @@ P_POSTBOOT = "/data/_root_postboot.sh"
 P_POSTBOOT_TPL = "/misc/_root_postboot.sh.tpl"
 P_FACTORY_LOG = "/data/log/factory_reset.log"
 
+# A "map" on these robots is NOT just /data/map. Per pkoehlers/maploader, which
+# supports this exact model (r2491, Mova P10 Pro Ultra), it is:
+#
+#     MapFolders: /data/ri, /data/map, /data/DivideMap
+#     mapFiles:   /data/config/ava/mult_map.json
+#
+# and the related r2416 (Dreame X40) profile adds /data/DivideDebug and
+# /data/log/map_info.bin. This robot reports model mova.vacuum.r2491a but has
+# hostname r2416_release, so we capture the UNION of both - they are tiny.
+#
+# Backing up only /data/map is why earlier restores failed: ava treats an
+# incomplete map as invalid and discards the slot on the next boot.
+MAP_PATHS = [
+    ("/data/ri", "data_ri.tar.gz", True),
+    ("/data/map", "data_map.tar.gz", True),
+    ("/data/DivideMap", "data_dividemap.tar.gz", True),
+    ("/data/DivideDebug", "data_dividedebug.tar.gz", True),
+    ("/data/log/map_info.bin", "map_info.bin", False),
+]
+
 # What a backup captures: (remote_path, archive_member_name, is_dir)
 BACKUP_ITEMS = [
     ("/data/valetudo_config.json", "valetudo_config.json", False),
@@ -47,10 +67,9 @@ BACKUP_ITEMS = [
     ("/data/_root_postboot.sh", "_root_postboot.sh", False),
     ("/data/log/factory_reset.log", "factory_reset.log", False),
     ("/data/config", "data_config.tar.gz", True),
-    ("/data/map", "data_map.tar.gz", True),
     ("/mnt/misc", "misc.tar.gz", True),
     ("/mnt/private", "private.tar.gz", True),
-]
+] + MAP_PATHS
 
 # Optional extras, controlled by settings. The voice pack is user-installed
 # content of a few MB: /data/config/ava/language_in_use records WHICH pack is
@@ -357,6 +376,20 @@ class RobotClient:
         self.run("killall -9 valetudo")
         rc, out, _ = self.run("pidof valetudo")
         return rc != 0 or not out.strip()
+
+    def stop_map_processes(self) -> None:
+        """
+        Stop ava and miio_client so map files can be swapped underneath them.
+
+        maploader does exactly this rather than rebooting: with ava running, it
+        holds the map open and will rewrite or discard whatever you put there.
+        """
+        self.run("sh /etc/rc.d/miio.sh stop", timeout=60)
+        self.run("killall -9 ava", timeout=60)
+
+    def start_map_processes(self) -> None:
+        self.run("sh /etc/rc.d/ava.sh >/dev/null 2>&1 &", timeout=60)
+        self.run("sh /etc/rc.d/miio.sh >/dev/null 2>&1 &", timeout=60)
 
     def reboot(self) -> None:
         """
