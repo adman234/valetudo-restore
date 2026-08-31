@@ -50,4 +50,7 @@
   <Config Name="Webhook URL" Target="VR_WEBHOOK_URL" Default=""
           Description="Notification webhook (Home Assistant, ntfy, Discord...). Leave empty to disable notifications."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Back up voice pack" Target="VR_BACKUP_VOICE_PACK" Default="true"
+          Description="Include /data/personalized_voice. This is ~5.5MB of a ~5.6MB backup. Set false if you have the pack's download URL saved elsewhere."
+          Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 </Container>
