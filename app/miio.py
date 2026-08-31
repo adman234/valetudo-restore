@@ -27,6 +27,19 @@ Map recovery properties (siid 6):
     piid 11   MAP_RECOVERY_STATUS   0 idle / 1 running / 2 success / 3 fail
     piid 14   MAP_BACKUP_STATUS
 
+Internally the property write is converted into an ava command, visible in the
+robot's own log as:
+
+    recv:msg_cvt{"type":"msgCvt","cmd":"map_restore","map_id":2,"ret":"ok"}
+
+so msg_cvt performs the download itself (writing /tmp/restore_maps.json) and
+then dispatches `map_restore` to ava with only the map id.
+
+STATUS: the trigger and download are proven; the archive FORMAT is not solved.
+Six candidate layouts built from real map data were all downloaded by the robot
+and all rejected with status 4. Getting this working needs a genuine recovery
+archive to compare against - see the README.
+
 The value written to 6/10 is a JSON *string*. `map_id` is mandatory when there is
 no cloud connection -- without it the write is rejected with code -1, which is
 exactly what the integration's docs mean by "Map ID is required if cloud
