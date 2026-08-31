@@ -68,7 +68,10 @@ class Settings(BaseModel):
     # files themselves ARE backed up; these are the fallback.
     voice_pack_url: str = ""
     voice_pack_hash: str = ""
-    duststreamer_url: str = ""
+    # Only an aarch64 build is published, so this is not templated on arch.
+    duststreamer_url: str = (
+        "https://github.com/Hypfer/Duststreamer/releases/latest/download/"
+        "duststreamer-aarch64")
 
     # --- valetudo binary ---
     valetudo_arch: Literal["aarch64", "armv7", "amd64"] = "aarch64"

@@ -75,12 +75,15 @@
     a rebuild does not depend on remembering. The pack files themselves are
     backed up &mdash; these are the fallback. Same for
     <code>duststreamer</code>: if a backup has no copy, it is downloaded from
-    this URL during a restore.
+    this URL during a restore. It already points at
+    <a href="https://github.com/Hypfer/Duststreamer/releases">Hypfer/Duststreamer</a>
+    &mdash; only an <code>aarch64</code> build is published, which is what this
+    robot runs, so you should not need to change it.
   </p>
   <div class="grid">
     <label class="wide">Voice pack download URL <input name="voice_pack_url" value="{{ s.voice_pack_url }}" placeholder="https://…/GORDON.tar.gz"></label>
     <label class="wide">Voice pack hash <input name="voice_pack_hash" value="{{ s.voice_pack_hash }}" placeholder="md5 from /data/config/ava/audio.conf"></label>
-    <label class="wide">duststreamer URL <input name="duststreamer_url" value="{{ s.duststreamer_url }}" placeholder="https://…/duststreamer"></label>
+    <label class="wide">duststreamer URL <input name="duststreamer_url" value="{{ s.duststreamer_url }}"></label>
   </div>
 
   <h2>Notifications</h2>
