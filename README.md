@@ -1,8 +1,14 @@
 # valetudo-restore
 
-Backup, monitoring and automatic restore for [Valetudo](https://valetudo.cloud)
-on rooted Dreame/Mova robots — for when the robot factory-resets itself and
-takes Valetudo with it.
+Stop rooted Dreame/Mova robots from factory-resetting themselves — and repair
+them when they misbehave, **without** losing your map.
+
+The firmware's answer to a crashing `ava` is to `rm -rf /data`. That destroys
+Valetudo, its settings, the voice pack, and your map with all its room names,
+zones and floor materials — and the map is the one thing that **cannot** be
+restored afterwards. This keeps the robot out of that state, and falls back to
+progressively narrower repairs that preserve the map where the firmware would
+not.
 
 Runs as a single Docker container with a web UI. Built for Unraid, but it's
 plain Docker and runs anywhere.
@@ -57,13 +63,23 @@ You can, however, make the firmware unable to reach the wipe. See below.
 
 ---
 
-## Preventing the wipe entirely
+## Preventing the wipe — and repairing without one
 
-Two properties of the firmware's own logic can be turned against it. Both were
-verified on a real r2416 by running a *neutered* copy of `factory_reset.sh` with
-every destructive command replaced by an echo.
+The firmware's only repair is "delete everything and hope". It does work — a
+wipe cleared a crash loop immediately on 2026-08-31, so the bad state really was
+in `/data` — but it takes Valetudo, the map, the room names and the voice pack
+with it.
 
-### 1. Hold the mark as a directory (recommended)
+And **the map cannot be restored afterwards.** `ava` validates map slots against
+the cloud platform (`DeletePlatformInconsistMaps` in `node_lidar_slam.so`) and
+discards any it does not recognise. Restoring `/data/map` gets the slot deleted
+on the next boot; making the files immutable so they *cannot* be deleted just
+gets them ignored instead (`"defaultMap": true`). Tested four ways, including
+with the `map_bak_info.json` registry and the room config restored alongside.
+
+So the useful goal is not "restore after a wipe". It is **repair without one.**
+
+### Blocking the wipe
 
 `monitor.sh` decides between rebooting and wiping with:
 
@@ -75,65 +91,86 @@ else
 fi
 ```
 
-`-f` tests for a *regular file*. If the mark is a **directory**, that test is
-false forever, so the firmware always takes the reboot branch and never calls
-`factory_reset.sh` at all:
+`-f` tests for a *regular file*, so holding the mark as a **directory** makes
+that test true forever and the firmware never calls `factory_reset.sh`:
 
 ```sh
-rm -f /data/sys_auto_reboot.mark
-mkdir -p /data/sys_auto_reboot.mark
+rm -f /data/sys_auto_reboot.mark && mkdir -p /data/sys_auto_reboot.mark
 ```
 
-This holds because `touch` on a directory merely updates its mtime rather than
-replacing it, and `rm -f` on a directory fails — so the mark survives both the
-firmware's `touch` and the nightly `check_restart_ava.sh` cleanup. A crash storm
-now costs reboots instead of your data.
+`touch` on a directory only updates mtime and `rm -f` on one fails, so the mark
+survives both the firmware's `touch` and the nightly `check_restart_ava.sh`.
 
-Note this is strictly better than racing to *delete* the mark, which is what
-earlier guards did. That race is unwinnable: after a strike-1 reboot the
-firmware can reach strike 2 in about 3–5 minutes, so a guard waiting for a
-"settled" system is asleep for exactly the window that matters.
+### The repair ladder
 
-### 2. Hold the entry mutex (belt-and-braces, off by default)
+Blocking the wipe alone is not enough. On 2026-08-31 it turned a broken `ava`
+into a reboot loop that ran for **days**, because the firmware's own repair was
+permanently blocked. So `guard/_wipe_guard.sh` repairs progressively — least
+destructive first — and only surrenders as a last resort:
 
-`factory_reset.sh` refuses to run if its own mutex already exists:
+| Consecutive failed boots | Action | What survives |
+|---|---|---|
+| 1–2 | nothing; most faults are transient | everything |
+| **3** | **Tier 1** — quarantine `/data/config/ava` | **map**, wifi, Valetudo, config, voice pack |
+| **5** | **Tier 2** — also quarantine `/data/map` | wifi, Valetudo, config, voice pack |
+| **8** | stand down; let the firmware wipe | nothing on `/data` |
+
+Tier 1 works because the factory package (`/misc/data.tar.bz2`) contains no
+`ava/` directory at all — just empty skeletons — so `ava` rebuilds its own
+config on next start, exactly as it does after a real factory reset. If the
+corruption is in the vendor config (which the 2026-08-31 evidence suggests),
+tier 1 fixes it **and keeps your map**.
+
+Repairs *quarantine* rather than delete: everything moves to
+`/data/_wipe_guard.quarantine/<tier>-<timestamp>/`, so it stays recoverable and
+diagnosable. The counter resets the moment `ava` is healthy again.
+
+**Hard safety rules, enforced in the script:**
+
+* `/data/config/miio` is **never** touched — it holds `wifi.conf` and the device
+  identity, and clearing it would put the robot off the network and out of reach.
+* `/mnt/private` is **never** touched — factory identity; corrupting it can brick.
+
+### Installing the guard
 
 ```sh
-if [ -f ${FACTORY_RESET} ]; then     # /tmp/factory_reset.txt
-	log "factory reset is running"
-	exit 1
+scp -O guard/_wipe_guard.sh root@<robot>:/data/_wipe_guard.sh   # or pipe via cat
+ssh root@<robot> 'chmod +x /data/_wipe_guard.sh'
 ```
 
-Pre-creating that file makes the script exit `1` before any destructive action,
-blocking **every** caller — `monitor_rescue_brick`, `monitor_disk_full`, and the
-physical reset button. Nothing else on the system reads or writes that path, so
-it has no other side effects. `/tmp` is tmpfs, so it must be recreated at boot.
+Add it to the boot hook (the tool does this automatically on restore):
 
-This is off by default precisely because it also disables deliberate factory
-resets. Enable it by creating `/data/_wipe_guard.block_all`.
+```sh
+if [ -x /data/_wipe_guard.sh ]; then
+        /data/_wipe_guard.sh > /dev/null 2>&1 &
+fi
+```
 
-### Trade-off
+### Optional: block every caller
 
-Blocking the wipe means a genuinely broken `ava` reboot-loops instead of being
-"repaired" by a reset. That is usually what you want — a reboot loop is visible
-and recoverable, whereas a wipe destroys Valetudo, the map and the Wi-Fi config
-and does not necessarily fix anything. Keep backups regardless.
-
----
-
-Even with the wipe blocked, keep good backups, notice quickly, and be able to
-put things back. Hence this tool.
+Create `/data/_wipe_guard.block_all` to also hold `/tmp/factory_reset.txt`, the
+mutex `factory_reset.sh` checks on entry. That blocks **every** caller including
+`monitor_disk_full` and the physical reset button. Off by default, since it
+disables deliberate factory resets too.
 
 ---
 
 ## What it does
 
+- **Wipe guard** — blocks the firmware's `rm -rf /data` outright
+- **Tiered repair** — fixes a crashing `ava` by quarantining just the vendor
+  config first, keeping your map; escalates only if that fails
 - **Nightly backup** of everything that matters, pulled over SSH
-- **Monitoring** every N minutes with four distinct states
+- **Monitoring** every N minutes with five distinct states
 - **Notifications** via webhook (Home Assistant, ntfy, Discord, …)
 - **Auto-restore** — off by default, opt-in
 - **Retention** — keep the newest N archives, prune the rest
 - **Web UI** for configuration, manual backup/restore and an event log
+
+Backups still matter: they carry Valetudo's config, timers, MQTT, the voice
+pack and — importantly — your **room names**, which live in
+`/data/config/ava/ava_SchedulePositionInfo.conf` and are readable straight out
+of an archive. They are what makes a re-map bearable if it ever comes to that.
 
 ### What gets backed up
 
