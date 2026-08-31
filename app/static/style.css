@@ -28,9 +28,12 @@ header { background: var(--panel); border-bottom: 1px solid var(--line); }
 .bot { margin-right: 6px; }
 nav a { color: var(--dim); text-decoration: none; margin-left: 18px; }
 nav a:hover { color: var(--accent); }
-main { padding: 22px 20px 40px; }
-footer { display: flex; justify-content: space-between; color: var(--dim);
-         font-size: 13px; padding: 18px 20px 30px; }
+/* main/footer also carry .wrap, and a class (0,1,0) outranks an element
+   (0,0,1) - so these MUST be more specific or .wrap's padding:0 20px wins and
+   the page sits flush against the header. */
+main.wrap { padding: 22px 20px 40px; }
+footer.wrap { display: flex; justify-content: space-between; color: var(--dim);
+              font-size: 13px; padding: 18px 20px 30px; }
 h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em;
      color: var(--dim); margin: 0 0 12px; font-weight: 600; }
 
