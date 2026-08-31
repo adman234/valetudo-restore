@@ -341,8 +341,9 @@ A backup captures more than an automatic restore writes back, deliberately.
 | `_wipe_guard.sh` | `/mnt/misc` — calibration |
 | `_root_postboot.sh` boot hook | `/mnt/private` — **never written** |
 
-So after an auto-restore you get Valetudo and every one of its settings back,
-but the robot still needs a fresh mapping run unless you also restore the map.
+So after an auto-restore you get Valetudo and every one of its settings back.
+The robot will still need a fresh mapping run: see the caveat under *Restoring
+the map* — map data does not survive a factory reset even when restored.
 
 `/mnt/private` holds factory identity (did/key/sn/mac/cpuid). It is backed up
 because it cannot be regenerated, and never written back because corrupting it
@@ -352,11 +353,25 @@ can brick the robot. Restore it by hand, deliberately, if you ever truly need to
 
 **The map is not a JSON file.** `/data/map` is a directory of binary SLAM data
 (`app_map.bin`, `fine_large.bin`, `wifi_fine.bin`) alongside a few JSON
-descriptors, so the transportable unit is a `.tar.gz`.
+descriptors, so the transportable unit is a `.tar.gz`. Valetudo's own map
+*download* produces a `ValetudoMap` JSON — a derived rendering format that
+cannot be converted back and is not restorable.
 
 Dashboard → **Restore map only**. Either restore from the newest backup, or
 upload an archive — both a full backup archive and a bare `data_map.tar.gz`
 are accepted, and anything else is rejected with an explanation.
+
+> **The map does NOT survive a factory reset.** Tested on an r2416 on
+> 2026-08-31: after a wipe, restoring `/data/map` puts the files back, but `ava`
+> deletes the map slot directory on the next boot and Valetudo reports
+> `"defaultMap": true`. This happens with or without the matching
+> `/data/config/ava/mult_map.json` registry entry restored — both were tried.
+> The SLAM map is bound to vendor state the reset clears, so an orphaned slot is
+> garbage-collected.
+>
+> **After a factory reset, plan on a fresh mapping run.** Map restore is useful
+> for putting a map back on a robot that still has its vendor state — for
+> example after an accidental map reset — not for recovering from a wipe.
 
 Safety properties:
 
