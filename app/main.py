@@ -110,7 +110,7 @@ def index(request: Request):
         "s": s,
         "version": __version__,
         "monitor": mon,
-        "backups": store.list_backups()[:25],
+        "backups": store.list_backups(),
         "events": store.recent_events(40),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),

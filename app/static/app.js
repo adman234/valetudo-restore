@@ -68,6 +68,18 @@
     });
   }
 
+  var showAll = document.getElementById("showall");
+  if (showAll) {
+    showAll.addEventListener("click", function () {
+      var rows = document.querySelectorAll("#backuptable tr.extra");
+      var hidden = rows.length && rows[0].hidden;
+      rows.forEach(function (r) { r.hidden = !hidden; });
+      showAll.textContent = hidden
+        ? "Show fewer"
+        : "Show all " + showAll.dataset.total + " backups";
+    });
+  }
+
   wireUpload("keyform", "/api/upload-key", "#keyout", null);
 
   // The restore form has TWO submit buttons posting to different endpoints

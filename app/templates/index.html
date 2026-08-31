@@ -88,11 +88,11 @@
 <section class="panel">
   <h2>Backups</h2>
   {% if backups %}
-  <table>
+  <table id="backuptable">
     <thead><tr><th>When</th><th>File</th><th>Size</th><th>Kind</th><th></th></tr></thead>
     <tbody>
     {% for b in backups %}
-      <tr>
+      <tr{% if loop.index > 5 %} class="extra" hidden{% endif %}>
         <td>{{ b.ts|ts }}</td>
         <td class="mono">{{ b.filename }}</td>
         <td>{{ b.size|size }}</td>
@@ -100,7 +100,9 @@
         <td class="right">
           <a href="/api/backups/{{ b.filename }}">download</a>
           <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
-                  data-confirm="Restore {{ b.filename }} onto the robot?">restore</button>
+                  data-confirm="Restore EVERYTHING from {{ b.filename }}?">restore all</button>
+          <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
+                  data-confirm="Restore only the map from {{ b.filename }}?">map only</button>
           <button class="link danger" data-post="/api/backups/{{ b.filename }}/delete"
                   data-confirm="Delete {{ b.filename }}?">delete</button>
         </td>
@@ -108,6 +110,16 @@
     {% endfor %}
     </tbody>
   </table>
+  {% if backups|length > 5 %}
+  <div class="actions">
+    <button id="showall" data-total="{{ backups|length }}">
+      Show all {{ backups|length }} backups
+    </button>
+  </div>
+  {% endif %}
+  <p class="hint">
+    Keeping {{ s.keep_backups }}; older archives are pruned automatically.
+  </p>
   {% else %}
     <p class="dim">No backups yet.</p>
   {% endif %}
