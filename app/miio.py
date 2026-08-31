@@ -46,6 +46,7 @@ from Crypto.Cipher import AES
 
 log = logging.getLogger("vr.miio")
 
+NUL = bytes([0])   # constant, not an inline escape (which tooling keeps mangling)
 MIIO_PORT = 54321
 HELLO = bytes.fromhex("21310020" + "ff" * 28)
 
@@ -110,16 +111,27 @@ class MiioClient:
     """Minimal local miio client. One socket per instance; not thread-safe."""
 
     def __init__(self, host: str, token: str, port: int = MIIO_PORT,
-                 timeout: float = 10.0):
+                 timeout: float = 10.0, retries: int = 4):
         self.host = host
         self.port = port
         self.token = normalise_token(token)
         self.timeout = timeout
+        # Retries cover genuine UDP loss (this robot's wifi roams between APs).
+        # NOTE: retries alone do NOT fix a replayed request id - see _id below.
+        # A stale id makes every attempt fail identically, which is what makes
+        # it look like packet loss or a dead device.
+        self.retries = retries
         self._sock: Optional[socket.socket] = None
         self._did: Optional[int] = None
         self._stamp: int = 0
         self._stamp_at: float = 0.0
-        self._id = 100
+        # The device tracks the last request id it saw and DROPS anything not
+        # greater - across connections, not just within one. Starting from a
+        # fixed number means the second client replays an id the robot has
+        # already seen and every reply is silently withheld, which looks
+        # exactly like a dead device. Seed from the clock so ids always climb,
+        # even across container restarts.
+        self._id = int(time.time()) % 2000000
 
     def __enter__(self) -> "MiioClient":
         self.connect()
@@ -159,29 +171,45 @@ class MiioClient:
         return self._did
 
     def call(self, method: str, params: Any) -> dict:
+        """
+        Send an RPC, retrying on timeout.
+
+        UDP loss on this robot's wifi is common enough that a single timeout
+        means nothing. Each attempt re-sends with a freshly computed stamp; the
+        device tolerates a repeated request id.
+        """
         if not self._sock:
             raise MiioError("not connected")
         self._id += 1
         payload = json.dumps(
             {"id": self._id, "method": method, "params": params}).encode()
         body = _encrypt(self.token, payload)
-        # The stamp must track the device's clock, NOT the message id. Sending
-        # handshake_stamp + id puts the packet seconds-to-minutes in the future
-        # and the device silently drops it, which looks exactly like a timeout.
-        stamp = self._stamp + int(time.monotonic() - self._stamp_at)
-        header = struct.pack(">HHIII", 0x2131, 32 + len(body), 0,
-                             self._did, stamp)
-        pkt = header + hashlib.md5(header + self.token + body).digest() + body
-        self._sock.sendto(pkt, (self.host, self.port))
-        try:
-            resp, _ = self._sock.recvfrom(65536)
-        except socket.timeout as e:
-            raise MiioError("timeout waiting for %s" % method) from e
-        try:
-            return json.loads(_decrypt(self.token, resp[32:]).rstrip(b"\x00").decode())
-        except Exception as e:
-            raise MiioError("could not decode reply to %s (bad token?): %s"
-                            % (method, e)) from e
+
+        last = None
+        for attempt in range(1, self.retries + 1):
+            # The stamp must track the device's clock, NOT the message id.
+            # handshake_stamp + id puts packets into the future and they are
+            # silently dropped, which also looks like a timeout.
+            stamp = self._stamp + int(time.monotonic() - self._stamp_at)
+            header = struct.pack(">HHIII", 0x2131, 32 + len(body), 0,
+                                 self._did, stamp)
+            pkt = header + hashlib.md5(header + self.token + body).digest() + body
+            try:
+                self._sock.sendto(pkt, (self.host, self.port))
+                resp, _ = self._sock.recvfrom(65536)
+            except socket.timeout as e:
+                last = e
+                log.debug("miio %s attempt %d/%d timed out",
+                          method, attempt, self.retries)
+                continue
+            try:
+                return json.loads(
+                    _decrypt(self.token, resp[32:]).rstrip(NUL).decode())
+            except Exception as e:
+                raise MiioError("could not decode reply to %s (bad token?): %s"
+                                % (method, e)) from e
+        raise MiioError("no reply to %s after %d attempts (udp loss?): %s"
+                        % (method, self.retries, last))
 
     # ---------- convenience ----------
     def info(self) -> dict:
