@@ -451,7 +451,12 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 except Exception as e:
                     steps.append("boot hook rebuild FAILED: %s" % e)
 
-                # 5. start
+                # 5. start - stop any existing instance FIRST. Starting
+                # unconditionally leaves the old process running: the newcomer
+                # cannot bind port 80 and sits there orphaned, but both have the
+                # same VALETUDO_CONFIG_PATH and can write it concurrently.
+                if c.stop_valetudo():
+                    steps.append("stopped existing Valetudo")
                 c.start_valetudo()
                 if s.restore_wipe_guard and guard:
                     c.start_guard()
