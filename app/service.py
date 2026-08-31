@@ -583,6 +583,10 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
             stamp = _stamp()
             quarantine = "/data/_map_replaced-%s" % stamp
             c.run("mkdir -p %s" % quarantine)
+            # Keep only the two most recent replaced maps; these are a few MB
+            # each and /data filling up is itself a factory-reset trigger.
+            c.run("ls -d /data/_map_replaced-* 2>/dev/null | head -n -2 "
+                  "| xargs -r rm -rf")
 
             c.stop_map_processes()
             steps.append("stopped ava + miio_client")
