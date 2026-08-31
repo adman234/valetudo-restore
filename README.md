@@ -70,14 +70,13 @@ wipe cleared a crash loop immediately on 2026-08-31, so the bad state really was
 in `/data` — but it takes Valetudo, the map, the room names and the voice pack
 with it.
 
-And **the map cannot be restored afterwards.** `ava` validates map slots against
-the cloud platform (`DeletePlatformInconsistMaps` in `node_lidar_slam.so`) and
-discards any it does not recognise. Restoring `/data/map` gets the slot deleted
-on the next boot; making the files immutable so they *cannot* be deleted just
-gets them ignored instead (`"defaultMap": true`). Tested four ways, including
-with the `map_bak_info.json` registry and the room config restored alongside.
+A map **can** be restored, provided the backup is complete - see *Restoring the
+map* below. Restoring only `/data/map` does not work: `ava` treats the map as
+invalid and discards the slot on the next boot. It needs `/data/ri` and
+`/data/DivideMap` too.
 
-So the useful goal is not "restore after a wipe". It is **repair without one.**
+Still, avoiding the wipe is far better than recovering from one, because a wipe
+also takes Valetudo, its settings and the voice pack.
 
 ### Blocking the wipe
 
@@ -101,35 +100,21 @@ rm -f /data/sys_auto_reboot.mark && mkdir -p /data/sys_auto_reboot.mark
 `touch` on a directory only updates mtime and `rm -f` on one fails, so the mark
 survives both the firmware's `touch` and the nightly `check_restart_ava.sh`.
 
-### The repair ladder
+### Standing down
 
-Blocking the wipe alone is not enough. On 2026-08-31 it turned a broken `ava`
-into a reboot loop that ran for **days**, because the firmware's own repair was
-permanently blocked. So `guard/_wipe_guard.sh` repairs progressively — least
-destructive first — and only surrenders as a last resort:
+Blocking the wipe forever is not free. On 2026-08-31 `ava` began crashing on
+every boot; the guard held, so nothing was lost, but the robot then rebooted
+every ~194s for **days** because the firmware's own repair was permanently
+blocked. Letting the reset happen fixed `ava` immediately.
 
-| Consecutive failed boots | Action | What survives |
-|---|---|---|
-| 1–2 | nothing; most faults are transient | everything |
-| **3** | **Tier 1** — quarantine `/data/config/ava` | **map**, wifi, Valetudo, config, voice pack |
-| **5** | **Tier 2** — also quarantine `/data/map` | wifi, Valetudo, config, voice pack |
-| **8** | stand down; let the firmware wipe | nothing on `/data` |
+So after **6 consecutive boots** where `ava` never becomes healthy, the guard
+removes the armor and lets the firmware factory-reset. Transient faults stay
+protected; a genuinely broken robot is not held hostage. The counter resets the
+moment `ava` is healthy.
 
-Tier 1 works because the factory package (`/misc/data.tar.bz2`) contains no
-`ava/` directory at all — just empty skeletons — so `ava` rebuilds its own
-config on next start, exactly as it does after a real factory reset. If the
-corruption is in the vendor config (which the 2026-08-31 evidence suggests),
-tier 1 fixes it **and keeps your map**.
-
-Repairs *quarantine* rather than delete: everything moves to
-`/data/_wipe_guard.quarantine/<tier>-<timestamp>/`, so it stays recoverable and
-diagnosable. The counter resets the moment `ava` is healthy again.
-
-**Hard safety rules, enforced in the script:**
-
-* `/data/config/miio` is **never** touched — it holds `wifi.conf` and the device
-  identity, and clearing it would put the robot off the network and out of reach.
-* `/mnt/private` is **never** touched — factory identity; corrupting it can brick.
+The guard also re-asserts wifi power-save off every 60s. The dustbuilder boot
+template tries at ~9s uptime, but `wlan0` does not associate until ~15s, so the
+boot-time attempt fails and the driver re-enables it on every roam.
 
 ### Installing the guard
 
@@ -158,8 +143,8 @@ disables deliberate factory resets too.
 ## What it does
 
 - **Wipe guard** — blocks the firmware's `rm -rf /data` outright
-- **Tiered repair** — fixes a crashing `ava` by quarantining just the vendor
-  config first, keeping your map; escalates only if that fails
+- **Bounded** — stands down after 6 failed boots so a genuinely broken robot
+  can still reach the firmware's own repair
 - **Nightly backup** of everything that matters, pulled over SSH
 - **Monitoring** every N minutes with five distinct states
 - **Notifications** via webhook (Home Assistant, ntfy, Discord, …)
@@ -180,7 +165,8 @@ of an archive. They are what makes a re-map bearable if it ever comes to that.
 | `/data/_wipe_guard.sh` | wipe-guard, if installed |
 | `/data/_root_postboot.sh` | boot hook |
 | `/data/log/factory_reset.log` | wipe history — the audit trail |
-| `/data/config`, `/data/map` | robot config and maps |
+| `/data/config` | vendor config, incl. room names and quirks |
+| `/data/ri`, `/data/map`, `/data/DivideMap`, `/data/DivideDebug`, `/data/log/map_info.bin` | **the complete map** — all of these, or it will not load |
 | `/mnt/misc` | calibration, LDS config, consumables |
 | `/mnt/private` | **irreplaceable** per-robot identity (did/key/sn/mac/cpuid) |
 | `/data/personalized_voice` | installed voice packs (optional, on by default) |
@@ -385,6 +371,23 @@ the map* — map data does not survive a factory reset even when restored.
 `/mnt/private` holds factory identity (did/key/sn/mac/cpuid). It is backed up
 because it cannot be regenerated, and never written back because corrupting it
 can brick the robot. Restore it by hand, deliberately, if you ever truly need to.
+
+### A dead end worth documenting: miio map recovery
+
+The vendor firmware has a map-recovery path reachable over the local miio
+protocol (`miio_client` listens on UDP 54321 and Valetudo does not occupy it).
+Writing siid 6 / piid 10 with
+`{"map_url","map_id","req_type","force_type"}` returns code 0 and the robot
+downloads the URL itself with wget. That much was verified on a real r2416.
+
+It was still abandoned. The recovery archive format is undocumented; nine
+candidate layouts built from the robot's own map data were all downloaded and
+all rejected. More to the point, **it is not needed**: copying the map paths
+directly, as maploader does, works and is far simpler.
+
+The real cause of every failed map restore before this was mundane - the backup
+was missing `/data/ri` and `/data/DivideMap`, so ava discarded the incomplete
+map. The miio investigation was an elaborate theory built on top of that bug.
 
 ### Restoring the map
 
