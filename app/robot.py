@@ -27,6 +27,11 @@ import paramiko
 
 log = logging.getLogger("vr.robot")
 
+# Written as byte constants rather than inline literals: these get mangled far
+# too easily by tooling that rewrites this file.
+CRLF = b"\r\n"
+LF = b"\n"
+
 # Paths on the robot
 P_VALETUDO = "/data/valetudo"
 P_CONFIG = "/data/valetudo_config.json"
@@ -136,6 +141,13 @@ class RobotClient:
             raise RobotUnreachable(
                 "cannot reach %s:%s: %s" % (self.host, self.port, e)
             ) from e
+        # Keepalives matter: a multi-megabyte upload over this robot's wifi can
+        # otherwise have the transport torn down mid-transfer, which surfaces as
+        # the singularly unhelpful "Socket is closed".
+        try:
+            c.get_transport().set_keepalive(15)
+        except Exception:
+            pass
         self._c = c
 
     def _load_key(self):
@@ -177,33 +189,63 @@ class RobotClient:
         return data
 
     def write_file(self, path: str, data: bytes, mode: str = "0644",
-                   timeout: int = 900) -> None:
+                   timeout: int = 900, retries: int = 3,
+                   progress=None) -> None:
         """
         Stream bytes to a remote path.
 
         scp/sftp are unavailable on this robot, so this pipes through `cat >`.
         Shell scripts are normalised to LF, because BusyBox ash cannot parse
         CRLF and fails in a way that looks like the script simply never ran.
+
+        Written in chunks and retried: a 37 MB upload takes tens of seconds and
+        this robot's wifi roams between access points, so a single dropped
+        transport should not fail the whole restore. Paramiko reports such a
+        drop as "Socket is closed", which says nothing about where it happened -
+        hence the explicit progress/attempt reporting.
         """
-        assert self._c, "not connected"
-        if path.endswith(".sh") and b"\r\n" in data:
+        if path.endswith(".sh") and CRLF in data:
             log.warning("normalising CRLF -> LF for %s", path)
-            data = data.replace(b"\r\n", b"\n")
-        chan = self._c.get_transport().open_session(timeout=self.timeout)
-        chan.settimeout(timeout)
-        chan.exec_command("cat > " + _q(path))
-        wfile = chan.makefile("wb")
-        try:
-            wfile.write(data)
-            wfile.flush()
-        finally:
-            wfile.close()
-        chan.shutdown_write()
-        rc = chan.recv_exit_status()
-        chan.close()
-        if rc != 0:
-            raise IOError("write %s failed (rc=%s)" % (path, rc))
-        self.run("chmod %s %s" % (mode, _q(path)))
+            data = data.replace(CRLF, LF)
+
+        chunk = 262144
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                tr = self._c.get_transport() if self._c else None
+                if tr is None or not tr.is_active():
+                    log.warning("transport dead before write, reconnecting")
+                    self.close()
+                    self.connect()
+                chan = self._c.get_transport().open_session(timeout=self.timeout)
+                chan.settimeout(timeout)
+                chan.exec_command("cat > " + _q(path))
+                sent = 0
+                try:
+                    while sent < len(data):
+                        n = chan.sendall(data[sent:sent + chunk])
+                        sent += chunk
+                        if progress and sent % (chunk * 20) == 0:
+                            progress(min(sent, len(data)), len(data))
+                finally:
+                    chan.shutdown_write()
+                rc = chan.recv_exit_status()
+                chan.close()
+                if rc != 0:
+                    raise IOError("remote cat exited %s writing %s" % (rc, path))
+                self.run("chmod %s %s" % (mode, _q(path)))
+                return
+            except Exception as e:
+                last_err = e
+                log.warning("write %s attempt %d/%d failed: %s",
+                            path, attempt, retries, e)
+                try:
+                    self.close()
+                    self.connect()
+                except Exception:
+                    pass
+        raise IOError("write %s failed after %d attempts: %s"
+                      % (path, retries, last_err))
 
     def md5(self, path: str) -> str:
         rc, out, _ = self.run("md5sum " + _q(path))

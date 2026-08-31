@@ -337,12 +337,21 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
                 if not probe.ssh_ok:
                     raise R.RobotUnreachable(probe.error or "probe failed")
 
-                # 1. binary
-                c.write_file(R.P_VALETUDO, blob, mode="0755")
-                got = c.md5(R.P_VALETUDO)
-                if got != want:
-                    raise IOError("md5 mismatch after upload: %s != %s" % (got, want))
-                steps.append("binary uploaded + md5 verified")
+                # 1. binary - skip the 37 MB upload if it is already correct.
+                # Most restores after a crash (as opposed to a wipe) have an
+                # intact binary, and the upload is the single most failure-prone
+                # step over this robot's wifi.
+                existing = c.md5(R.P_VALETUDO) if c.path_exists(R.P_VALETUDO) else ""
+                if existing == want:
+                    steps.append("binary already correct (md5 match) - upload skipped")
+                else:
+                    steps.append("uploading binary (%.1f MB)..." % (len(blob) / 1048576))
+                    c.write_file(R.P_VALETUDO, blob, mode="0755")
+                    got = c.md5(R.P_VALETUDO)
+                    if got != want:
+                        raise IOError("md5 mismatch after upload: %s != %s" % (got, want))
+                    steps[-1] = "binary uploaded + md5 verified"
+
 
                 # 2. config
                 if cfg:
