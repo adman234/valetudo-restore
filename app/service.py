@@ -291,7 +291,8 @@ def prune_backups(s: Settings) -> int:
 # --------------------------------------------------------------------------
 # restore
 # --------------------------------------------------------------------------
-def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
+def run_restore(filename: Optional[str] = None, reason: str = "manual",
+                blob: Optional[bytes] = None) -> dict:
     """
     Reinstall Valetudo and its state onto the robot.
 
@@ -300,18 +301,38 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
     the wifi power-save fix or VALETUDO_CONFIG_PATH.
     """
     s = load_settings()
-    store.reconcile_backups(BACKUP_DIR)
-    rows = store.list_backups()
-    if filename:
-        chosen = next((r for r in rows if r["filename"] == filename), None)
+    uploaded_tmp = None
+    if blob is not None:
+        # Validate before doing anything: a friendly message beats
+        # "not a gzip file" from deep inside tarfile.
+        try:
+            with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as probe:
+                if "valetudo_config.json" not in probe.getnames():
+                    return {"ok": False, "error":
+                            "That archive does not look like a backup from this "
+                            "tool - it has no valetudo_config.json."}
+        except Exception:
+            return {"ok": False, "error":
+                    "That file is not a readable .tar.gz backup archive. Upload "
+                    "a valetudo-backup-....tar.gz produced by this tool."}
+        # Restore straight from the upload without adding it to the retention pool.
+        import tempfile
+        tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
+        tmpf.write(blob); tmpf.close()
+        archive = uploaded_tmp = Path(tmpf.name)
+        chosen = {"filename": "uploaded archive (%.1f MB)" % (len(blob) / 1048576)}
     else:
-        chosen = rows[0] if rows else None
-    if not chosen:
-        return {"ok": False, "error": "no backup available to restore"}
-
-    archive = BACKUP_DIR / chosen["filename"]
-    if not archive.exists():
-        return {"ok": False, "error": "backup file missing: %s" % archive.name}
+        store.reconcile_backups(BACKUP_DIR)
+        rows = store.list_backups()
+        if filename:
+            chosen = next((r for r in rows if r["filename"] == filename), None)
+        else:
+            chosen = rows[0] if rows else None
+        if not chosen:
+            return {"ok": False, "error": "no backup available to restore"}
+        archive = BACKUP_DIR / chosen["filename"]
+        if not archive.exists():
+            return {"ok": False, "error": "backup file missing: %s" % archive.name}
 
     steps: list[str] = []
     try:
@@ -407,6 +428,12 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual") -> dict:
         store.log_event("error", "restore", "restore FAILED: %s" % e, steps)
         notify(s, "restore_failed", "Restore failed: %s" % e, {"steps": steps})
         return {"ok": False, "error": str(e), "steps": steps}
+    finally:
+        if uploaded_tmp is not None:
+            try:
+                uploaded_tmp.unlink()
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------------------

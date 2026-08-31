@@ -69,6 +69,14 @@ BACKUP_ITEMS = [
     ("/data/config", "data_config.tar.gz", True),
     ("/mnt/misc", "misc.tar.gz", True),
     ("/mnt/private", "private.tar.gz", True),
+    # Small state files that hold real user-facing settings and bookkeeping.
+    # /data/misc is deliberately NOT here: it is a byte-identical copy of
+    # /mnt/misc, which is already captured.
+    ("/data/sys_info_record.json", "sys_info_record.json", False),   # charging window, mop/waterbox
+    ("/data/clean_record.json", "clean_record.json", False),         # consumable counters
+    ("/data/ai_model_inuse.json", "ai_model_inuse.json", False),     # AI model versions
+    ("/data/zt_conmon_file", "zt_conmon_file.tar.gz", True),         # robot state + map bookkeeping
+    ("/data/DivideAI", "data_divideai.tar.gz", True),                # AI obstacle data
 ] + MAP_PATHS
 
 # Optional extras, controlled by settings. The voice pack is user-installed

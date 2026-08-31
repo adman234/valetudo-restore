@@ -200,8 +200,15 @@ def api_backup():
 
 
 @app.post("/api/restore")
-def api_restore(filename: str = Form(default="")):
-    return service.run_restore(filename or None, reason="manual")
+async def api_restore(filename: str = Form(default=""),
+                      file: UploadFile = File(default=None)):
+    blob = None
+    if file is not None and getattr(file, "filename", ""):
+        blob = await file.read()
+        if len(blob) > 200 * 1024 * 1024:
+            return JSONResponse({"ok": False, "error": "file too large"},
+                                status_code=413)
+    return service.run_restore(filename or None, reason="manual", blob=blob)
 
 
 @app.post("/api/monitor-tick")

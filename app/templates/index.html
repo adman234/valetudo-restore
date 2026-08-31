@@ -68,8 +68,12 @@
       Reboot robot
     </button>
     <button class="danger" data-post="/api/restore" data-out="#out"
-            data-confirm="Restore the newest backup onto the robot? This overwrites /data/valetudo and its config.">
-      Restore newest
+            data-confirm="Restore EVERYTHING from the newest backup? This overwrites Valetudo, its config and the voice pack.">
+      Restore everything (newest)
+    </button>
+    <button class="danger" data-post="/api/restore-map" data-out="#out"
+            data-confirm="Restore only the map from the newest backup? Your current map is set aside first.">
+      Restore map only (newest)
     </button>
   </div>
   <p class="hint">
@@ -111,51 +115,57 @@
 </section>
 
 <section class="panel">
-  <h2>Restore map</h2>
+  <h2>Restore from a specific archive</h2>
   <p class="hint">
-    Puts your saved map back &mdash; the floorplan, room divisions and room
-    names. Valetudo, its settings and the voice pack are left alone, so use this
-    when the map is missing but everything else is fine.
+    Upload a backup archive and choose how much of it to put back. Use this for
+    an older archive, or one kept outside this container. To restore from the
+    newest backup, use the buttons at the top.
   </p>
 
-  <div class="actions">
-    <button data-post="/api/restore-map" data-out="#mapout"
-            data-confirm="Restore the map from the newest backup? Your current map is set aside first, so this can be undone.">
-      Restore map from newest backup
-    </button>
-  </div>
-
-  <p class="hint">or restore from a specific archive:</p>
-  <form id="mapform" enctype="multipart/form-data" class="mapform">
+  <form id="restoreform" enctype="multipart/form-data" class="mapform">
     <input type="file" name="file" accept=".gz,.tgz,.tar.gz" required>
-    <button type="submit">Upload &amp; restore</button>
+    <button type="submit" class="danger" data-endpoint="/api/restore"
+            data-confirm="Restore EVERYTHING from this archive? Overwrites Valetudo, its config and the voice pack.">
+      Upload &amp; restore everything
+    </button>
+    <button type="submit" class="danger" data-endpoint="/api/restore-map"
+            data-confirm="Restore only the map from this archive? Your current map is set aside first.">
+      Upload &amp; restore map only
+    </button>
   </form>
+
   <p class="hint">
-    This must be a <strong>backup archive produced by this tool</strong>
+    <strong>Restore everything</strong> puts back Valetudo, its settings
+    (MQTT, schedules), the voice pack and the boot hook &mdash; but
+    <em>not</em> the map. <strong>Restore map only</strong> puts back just the
+    map and leaves Valetudo untouched. Run both, in that order, for a complete
+    recovery.
+  </p>
+  <p class="hint">
+    The file must be a backup archive from this tool
     (<code>valetudo-backup-….tar.gz</code>). A bare <code>data_map.tar.gz</code>
     will not work &mdash; a map is five separate paths, not one folder.
   </p>
 
   <details class="hint">
-    <summary>What this actually does</summary>
+    <summary>What a map restore actually does</summary>
     <p>
       A map is <code>/data/ri</code> + <code>/data/map</code> +
       <code>/data/DivideMap</code> (+ <code>/data/DivideDebug</code>,
       <code>map_info.bin</code>, <code>mult_map.json</code>). Restoring only
       <code>/data/map</code> produces a map <code>ava</code> rejects on the next
-      boot &mdash; which is why a backup taken before this tool captured the full
-      set is refused rather than half-applied.
+      boot, so an archive missing any of these is refused rather than
+      half-applied.
     </p>
     <p>
       <code>ava</code> and <code>miio_client</code> are stopped, the files are
-      swapped, and both are restarted. <strong>No reboot needed.</strong> Your
-      previous map is moved to
-      <code>/data/_map_replaced-&lt;timestamp&gt;</code> on the robot rather than
-      deleted, so it can be put back by hand. <code>/data/config/miio</code>
-      (wifi and device identity) and <code>/mnt/private</code> are never touched.
+      swapped, and both restart. <strong>No reboot needed.</strong> Your previous
+      map is moved to <code>/data/_map_replaced-&lt;timestamp&gt;</code> rather
+      than deleted. <code>/data/config/miio</code> (wifi and device identity) and
+      <code>/mnt/private</code> are never touched.
     </p>
   </details>
-  <pre id="mapout" class="out" hidden></pre>
+  <pre id="restoreout" class="out" hidden></pre>
 </section>
 
 <section class="panel">

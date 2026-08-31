@@ -69,6 +69,28 @@
   }
 
   wireUpload("keyform", "/api/upload-key", "#keyout", null);
-  wireUpload("mapform", "/api/restore-map", "#mapout",
-    "Restore map data onto the robot from this file? The current map is copied aside first.");
+
+  // The restore form has TWO submit buttons posting to different endpoints
+  // (everything vs map-only), so the target comes from the button, not the form.
+  var rf = document.getElementById("restoreform");
+  if (rf) {
+    rf.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button[type=submit][data-endpoint]");
+      if (b) { rf.dataset.endpoint = b.dataset.endpoint;
+               rf.dataset.confirm = b.getAttribute("data-confirm") || ""; }
+    });
+    rf.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var url = rf.dataset.endpoint || "/api/restore";
+      if (rf.dataset.confirm && !window.confirm(rf.dataset.confirm)) { return; }
+      var btns = rf.querySelectorAll("button[type=submit]");
+      btns.forEach(function (b) { b.disabled = true; });
+      show("#restoreout", "working… large archives take a minute.");
+      fetch(url, { method: "POST", body: new FormData(rf) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { show("#restoreout", d); })
+        .catch(function (e) { show("#restoreout", "Upload failed: " + e); })
+        .finally(function () { btns.forEach(function (b) { b.disabled = false; }); });
+    });
+  }
 })();
