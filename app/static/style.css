@@ -102,3 +102,11 @@ input[type=checkbox] { width: auto; padding: 0; }
 .hint { color: var(--dim); font-size: 13px; margin: 8px 0 20px; }
 .hint.danger-hint { border-left: 2px solid var(--warn); padding-left: 10px; }
 form.panel h2:not(:first-child) { margin-top: 22px; }
+
+details.hint { border: 1px solid var(--line); border-radius: 7px;
+               padding: 8px 12px; margin: 12px 0 4px; }
+details.hint summary { cursor: pointer; color: var(--accent); font-size: 13px;
+                       list-style: revert; }
+details.hint p { margin: 10px 0 4px; }
+.mapform { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+           margin: 4px 0 8px; }

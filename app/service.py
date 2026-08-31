@@ -480,44 +480,8 @@ def reboot_robot() -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def extract_map_archive(blob: bytes) -> bytes:
-    """
-    Accept either a full valetudo-restore backup or a bare map tarball and
-    return the map tarball bytes.
-
-    The map is NOT a single JSON file - /data/map is a directory holding binary
-    SLAM data (app_map.bin, fine_large.bin) alongside a few JSON descriptors, so
-    the transportable unit is the gzipped tar of that directory.
-    """
-    try:
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
-            names = t.getnames()
-    except Exception as e:
-        raise ValueError(
-            "Not a readable .tar.gz. Upload a backup archive from this tool, or "
-            "the data_map.tar.gz extracted from one. The map is not a JSON file."
-        ) from e
-
-    if "data_map.tar.gz" in names:            # a full backup archive
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
-            f = t.extractfile("data_map.tar.gz")
-            if not f:
-                raise ValueError("data_map.tar.gz present but unreadable")
-            return f.read()
-
-    # a bare map tarball: expect the map descriptors at its root
-    if any(n.lstrip("./") in ("map_id.json", "version_file.json") for n in names):
-        return blob
-
-    raise ValueError(
-        "This archive does not look like map data. Expected either a backup "
-        "containing data_map.tar.gz, or a map tarball containing map_id.json. "
-        "Found: %s" % ", ".join(names[:8])
-    )
-
-
 def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
-                also_vendor_config: bool = False) -> dict:
+                force: bool = False) -> dict:
     """
     Restore a complete map, the way pkoehlers/maploader does it.
 
@@ -569,11 +533,28 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
                         vendor_map = None
 
         if "data_map.tar.gz" not in have:
-            raise ValueError("this archive has no map data")
+            raise ValueError(
+                "This archive contains no map data. Only backup archives "
+                "produced by this tool can be restored.")
+
+        # Refuse an incomplete archive rather than producing a map ava will
+        # reject. Archives taken before the full map set was understood have
+        # /data/map but not /data/ri or /data/DivideMap; restoring those looks
+        # like it works and then the map silently vanishes on the next boot.
         missing = [m for _, m, _ in R.MAP_PATHS if m not in have]
+        if missing and not force:
+            return {
+                "ok": False,
+                "error": "This backup is missing %s, so the map is incomplete "
+                         "and ava would discard it on the next boot. It was "
+                         "taken before this tool captured the full map set. "
+                         "Use a newer backup." % ", ".join(missing),
+                "missing": missing,
+                "hint": "Pass force=true to attempt it anyway (expected to fail).",
+            }
         if missing:
-            steps.append("NOTE: archive predates full map capture; missing %s"
-                         % ", ".join(missing))
+            steps.append("FORCED: archive missing %s - expect ava to discard "
+                         "the map" % ", ".join(missing))
 
         with _client(s) as c:
             probe = c.probe()

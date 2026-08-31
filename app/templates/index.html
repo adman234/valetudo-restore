@@ -76,8 +76,8 @@
     <strong>Restart Valetudo</strong> stops and relaunches just the Valetudo
     process &mdash; its own web UI has no restart control. It always relaunches
     with <code>VALETUDO_CONFIG_PATH</code> set, so your settings stay on
-    persistent storage. <strong>Reboot robot</strong> restarts the whole machine,
-    which is what you want after restoring a map.
+    persistent storage. <strong>Reboot robot</strong> restarts the whole machine
+    &mdash; rarely needed, since restoring a map restarts only what it has to.
   </p>
   <pre id="out" class="out" hidden></pre>
 </section>
@@ -111,36 +111,50 @@
 </section>
 
 <section class="panel">
-  <h2>Restore map only</h2>
+  <h2>Restore map</h2>
   <p class="hint">
-    Puts <code>/data/map</code> back without touching the Valetudo binary or its
-    config. Useful after a wipe, since a full restore brings back Valetudo and
-    its settings but leaves you needing a fresh mapping run.
+    Puts your saved map back &mdash; the floorplan, room divisions and room
+    names. Valetudo, its settings and the voice pack are left alone, so use this
+    when the map is missing but everything else is fine.
   </p>
-  <p class="hint">
-    <strong>The map is not a JSON file.</strong> <code>/data/map</code> is a
-    directory of binary SLAM data (<code>app_map.bin</code>,
-    <code>fine_large.bin</code>) plus a few JSON descriptors, so upload a
-    <code>.tar.gz</code> &mdash; either a whole backup archive from this tool, or
-    the <code>data_map.tar.gz</code> extracted from one.
-  </p>
+
   <div class="actions">
     <button data-post="/api/restore-map" data-out="#mapout"
-            data-confirm="Restore the map from the newest backup? The robot's current map is copied aside first.">
+            data-confirm="Restore the map from the newest backup? Your current map is set aside first, so this can be undone.">
       Restore map from newest backup
     </button>
   </div>
+
+  <p class="hint">or restore from a specific archive:</p>
   <form id="mapform" enctype="multipart/form-data" class="mapform">
     <input type="file" name="file" accept=".gz,.tgz,.tar.gz" required>
-    <label class="check"><input type="checkbox" name="also_vendor_config"> also restore vendor config (/data/config)</label>
-    <button type="submit">Upload &amp; restore map</button>
+    <button type="submit">Upload &amp; restore</button>
   </form>
-  <p class="hint danger-hint">
-    The existing map is copied to <code>/data/map.bak-&lt;timestamp&gt;</code>
-    first, so this is reversible. Reboot the robot afterwards &mdash;
-    <code>ava</code> holds the map files open and will not pick up changes made
-    underneath it. <code>/mnt/private</code> is never written.
+  <p class="hint">
+    This must be a <strong>backup archive produced by this tool</strong>
+    (<code>valetudo-backup-….tar.gz</code>). A bare <code>data_map.tar.gz</code>
+    will not work &mdash; a map is five separate paths, not one folder.
   </p>
+
+  <details class="hint">
+    <summary>What this actually does</summary>
+    <p>
+      A map is <code>/data/ri</code> + <code>/data/map</code> +
+      <code>/data/DivideMap</code> (+ <code>/data/DivideDebug</code>,
+      <code>map_info.bin</code>, <code>mult_map.json</code>). Restoring only
+      <code>/data/map</code> produces a map <code>ava</code> rejects on the next
+      boot &mdash; which is why a backup taken before this tool captured the full
+      set is refused rather than half-applied.
+    </p>
+    <p>
+      <code>ava</code> and <code>miio_client</code> are stopped, the files are
+      swapped, and both are restarted. <strong>No reboot needed.</strong> Your
+      previous map is moved to
+      <code>/data/_map_replaced-&lt;timestamp&gt;</code> on the robot rather than
+      deleted, so it can be put back by hand. <code>/data/config/miio</code>
+      (wifi and device identity) and <code>/mnt/private</code> are never touched.
+    </p>
+  </details>
   <pre id="mapout" class="out" hidden></pre>
 </section>
 
