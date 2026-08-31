@@ -352,6 +352,8 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
             cfg = member("valetudo_config.json")
             guard = member("_wipe_guard.sh")
             voice = member("personalized_voice.tar.gz")
+            dust = member("duststreamer")
+            vendor_cfg = member("data_config.tar.gz")
 
             with _client(s) as c:
                 probe = c.probe()
@@ -399,6 +401,48 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     steps.append("voice pack restored (%d bytes)" % len(voice)
                                  if rc == 0 else
                                  "voice pack FAILED: %s" % err.strip())
+
+                # 3c. vendor settings the user actually chose. These live in
+                # /data/config/ava and were previously skipped entirely, which
+                # is why obstacle images, pet avoidance and similar came back at
+                # factory defaults after a restore. Restored from a curated
+                # allowlist - never /data/config/miio (wifi + identity), never
+                # the history .db files.
+                if s.restore_vendor_settings and vendor_cfg:
+                    done, failed = [], []
+                    try:
+                        with tarfile.open(fileobj=io.BytesIO(vendor_cfg)) as vt:
+                            for name in R.VENDOR_SETTINGS:
+                                try:
+                                    data = vt.extractfile("./ava/" + name).read()
+                                except Exception:
+                                    continue
+                                try:
+                                    c.write_file("/data/config/ava/" + name, data)
+                                    done.append(name)
+                                except Exception:
+                                    failed.append(name)
+                    except Exception as e:
+                        steps.append("vendor settings FAILED: %s" % e)
+                    if done:
+                        steps.append("vendor settings restored (%d): %s"
+                                     % (len(done), ", ".join(done)))
+                    if failed:
+                        steps.append("vendor settings failed: %s" % ", ".join(failed))
+
+                # 3d. duststreamer - camera streaming binary, wiped with /data
+                if s.restore_duststreamer:
+                    if dust:
+                        c.write_file(R.P_DUSTSTREAMER, dust, mode="0755")
+                        steps.append("duststreamer restored (%d bytes)" % len(dust))
+                    elif s.duststreamer_url:
+                        rc, _, err = c.run(
+                            "wget -q -O %s %s && chmod 0755 %s"
+                            % (R.P_DUSTSTREAMER, s.duststreamer_url, R.P_DUSTSTREAMER),
+                            timeout=300)
+                        steps.append("duststreamer downloaded from configured URL"
+                                     if rc == 0 else
+                                     "duststreamer download FAILED: %s" % err.strip())
 
                 # 4. boot hook from the rootfs template
                 try:

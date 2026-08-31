@@ -60,6 +60,11 @@ MAP_PATHS = [
     ("/data/log/map_info.bin", "map_info.bin", False),
 ]
 
+# duststreamer is the camera-streaming binary. Like Valetudo it lives on /data
+# and is destroyed by a wipe, and like Valetudo it is a single static binary -
+# so it is captured when present and put back on restore.
+DUSTSTREAMER_ITEM = ("/data/duststreamer", "duststreamer", False)
+
 # What a backup captures: (remote_path, archive_member_name, is_dir)
 BACKUP_ITEMS = [
     ("/data/valetudo_config.json", "valetudo_config.json", False),
@@ -77,7 +82,7 @@ BACKUP_ITEMS = [
     ("/data/ai_model_inuse.json", "ai_model_inuse.json", False),     # AI model versions
     ("/data/zt_conmon_file", "zt_conmon_file.tar.gz", True),         # robot state + map bookkeeping
     ("/data/DivideAI", "data_divideai.tar.gz", True),                # AI obstacle data
-] + MAP_PATHS
+] + MAP_PATHS + [DUSTSTREAMER_ITEM]
 
 # Optional extras, controlled by settings. The voice pack is user-installed
 # content of a few MB: /data/config/ava/language_in_use records WHICH pack is
@@ -88,7 +93,30 @@ OPTIONAL_ITEMS = {
     "voice_pack": ("/data/personalized_voice", "personalized_voice.tar.gz", True),
 }
 
+
 P_VOICE = "/data/personalized_voice"
+P_DUSTSTREAMER = "/data/duststreamer"
+
+# Vendor settings that hold USER choices and are safe to put back after a wipe.
+# Deliberately a curated allowlist rather than all of /data/config:
+#   * /data/config/miio is never restored - wifi + device identity
+#   * the .db files (clean_log.db, timer_task.db) are history, and history is
+#     the most likely place for the corruption that triggers a wipe
+# clean_parameter.json is the important one: obstacle images, pet avoidance,
+# carpet handling, child lock, mop settings all live there.
+VENDOR_SETTINGS = [
+    "clean_parameter.json",           # obstacle images, pet avoidance, carpet, mop, child lock
+    "cd_conf.json",                   # auto-empty behaviour
+    "annoy.json",
+    "audio.conf",                     # WHICH voice pack is installed (+ its md5)
+    "language_in_use",                # which voice pack is selected
+    "media.conf",
+    "ava_speech.conf",
+    "ava_speech_seginfo.conf",
+    "ava_SchedulePositionInfo.conf",  # room names
+    "ava_shortcutinfo.conf",
+    "iot_conf.json",
+]
 
 
 class RobotAuthError(Exception):

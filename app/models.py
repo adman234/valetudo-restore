@@ -56,6 +56,20 @@ class Settings(BaseModel):
     webhook_url: str = ""
     webhook_headers: str = ""  # JSON object, optional
 
+    # --- restore extras ---
+    # Vendor settings (obstacle images, pet avoidance, carpet handling, mop
+    # options, room names) live in /data/config/ava. Restoring them is opt-out
+    # because a wipe is usually triggered by something in /data being wrong.
+    restore_vendor_settings: bool = True
+    restore_duststreamer: bool = True
+    # Neither of these is recoverable from the robot: Valetudo takes a URL and a
+    # hash to install a voice pack and persists neither. Record them here so a
+    # rebuild does not depend on remembering where they came from. The pack
+    # files themselves ARE backed up; these are the fallback.
+    voice_pack_url: str = ""
+    voice_pack_hash: str = ""
+    duststreamer_url: str = ""
+
     # --- valetudo binary ---
     valetudo_arch: Literal["aarch64", "armv7", "amd64"] = "aarch64"
     auto_download_binary: bool = True
@@ -91,6 +105,11 @@ ENV_MAP = {
     "VR_NOTIFY_ON_CRASH": "notify_on_crash",
     "VR_NOTIFY_ON_RESTORE": "notify_on_restore",
     "VR_NOTIFY_ON_BACKUP_FAILURE": "notify_on_backup_failure",
+    "VR_RESTORE_VENDOR_SETTINGS": "restore_vendor_settings",
+    "VR_RESTORE_DUSTSTREAMER": "restore_duststreamer",
+    "VR_VOICE_PACK_URL": "voice_pack_url",
+    "VR_VOICE_PACK_HASH": "voice_pack_hash",
+    "VR_DUSTSTREAMER_URL": "duststreamer_url",
     "VR_VALETUDO_ARCH": "valetudo_arch",
     "VR_AUTO_DOWNLOAD_BINARY": "auto_download_binary",
 }

@@ -45,7 +45,6 @@
   <h2>Recovery</h2>
   <div class="grid">
     <label class="check"><input type="checkbox" name="auto_restore" {% if s.auto_restore %}checked{% endif %}> Auto-restore when a wipe is detected</label>
-    <label class="check"><input type="checkbox" name="restore_wipe_guard" {% if s.restore_wipe_guard %}checked{% endif %}> Reinstall wipe-guard + boot hook</label>
     <label>Max attempts <input name="max_restore_attempts" type="number" min="1" max="10" value="{{ s.max_restore_attempts }}"></label>
     <label>Per window (h) <input name="restore_window_hours" type="number" min="1" max="168" value="{{ s.restore_window_hours }}"></label>
   </div>
@@ -54,6 +53,35 @@
     <em>confirmed</em> state where SSH succeeded and the binary was observed
     missing &mdash; never on an unreachable robot.
   </p>
+
+  <h2>What a restore puts back</h2>
+  <div class="grid">
+    <label class="check"><input type="checkbox" name="restore_wipe_guard" {% if s.restore_wipe_guard %}checked{% endif %}> Wipe-guard + boot hook</label>
+    <label class="check"><input type="checkbox" name="restore_vendor_settings" {% if s.restore_vendor_settings %}checked{% endif %}> Vendor settings (obstacle images, pet avoidance, carpet, mop, room names)</label>
+    <label class="check"><input type="checkbox" name="restore_duststreamer" {% if s.restore_duststreamer %}checked{% endif %}> duststreamer (camera streaming)</label>
+  </div>
+  <p class="hint">
+    <strong>Vendor settings</strong> live in <code>/data/config/ava</code> and were
+    previously skipped, which is why things like obstacle images and pet
+    avoidance came back at factory defaults after a restore. A curated list is
+    restored &mdash; never <code>/data/config/miio</code> (wifi and device
+    identity) and never the history databases.
+  </p>
+
+  <h2>Rebuild references</h2>
+  <p class="hint">
+    Valetudo installs a voice pack from a URL + hash and stores <em>neither</em>
+    on the robot, so these cannot be recovered from a backup. Record them here so
+    a rebuild does not depend on remembering. The pack files themselves are
+    backed up &mdash; these are the fallback. Same for
+    <code>duststreamer</code>: if a backup has no copy, it is downloaded from
+    this URL during a restore.
+  </p>
+  <div class="grid">
+    <label class="wide">Voice pack download URL <input name="voice_pack_url" value="{{ s.voice_pack_url }}" placeholder="https://…/GORDON.tar.gz"></label>
+    <label class="wide">Voice pack hash <input name="voice_pack_hash" value="{{ s.voice_pack_hash }}" placeholder="md5 from /data/config/ava/audio.conf"></label>
+    <label class="wide">duststreamer URL <input name="duststreamer_url" value="{{ s.duststreamer_url }}" placeholder="https://…/duststreamer"></label>
+  </div>
 
   <h2>Notifications</h2>
   <div class="grid">
