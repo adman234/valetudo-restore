@@ -56,6 +56,17 @@ class Settings(BaseModel):
     webhook_url: str = ""
     webhook_headers: str = ""  # JSON object, optional
 
+    # --- miio local RPC (map recovery) ---
+    # miio_client listens on UDP 54321 and Valetudo does not occupy it, giving a
+    # local token-authenticated channel to the vendor firmware. Used for map
+    # recovery, which has no other working path.
+    miio_enabled: bool = True
+    miio_token: str = ""          # blank = read /etc/miio/device.token over SSH
+    miio_port: int = 54321
+    # The robot fetches the recovery file itself, so it needs a URL it can reach.
+    # Blank = auto-detect this container's address as seen from the robot.
+    miio_callback_host: str = ""
+
     # --- valetudo binary ---
     valetudo_arch: Literal["aarch64", "armv7", "amd64"] = "aarch64"
     auto_download_binary: bool = True
@@ -91,6 +102,10 @@ ENV_MAP = {
     "VR_NOTIFY_ON_CRASH": "notify_on_crash",
     "VR_NOTIFY_ON_RESTORE": "notify_on_restore",
     "VR_NOTIFY_ON_BACKUP_FAILURE": "notify_on_backup_failure",
+    "VR_MIIO_ENABLED": "miio_enabled",
+    "VR_MIIO_TOKEN": "miio_token",
+    "VR_MIIO_PORT": "miio_port",
+    "VR_MIIO_CALLBACK_HOST": "miio_callback_host",
     "VR_VALETUDO_ARCH": "valetudo_arch",
     "VR_AUTO_DOWNLOAD_BINARY": "auto_download_binary",
 }
