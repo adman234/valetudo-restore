@@ -49,6 +49,7 @@ BLOCK_ALL=/data/_wipe_guard.block_all
 ESCALATIONS=/data/_wipe_guard.escalations
 STOOD_DOWN=/data/_wipe_guard.stood_down
 FR_MUTEX=/tmp/factory_reset.txt
+PIDFILE=/data/_wipe_guard.pid
 
 ESCALATION_LIMIT=6          # consecutive unhealthy boots before standing down
 HEALTH_GRACE=150            # seconds to let ava come up before judging
@@ -113,6 +114,17 @@ assess_boot() {
     fi
     return 0
 }
+
+# Refuse to start if another instance is already alive. The boot hook and a
+# restore can both launch this, and duplicates fight over the same state files.
+if [ -f "$PIDFILE" ]; then
+    old=$(cat "$PIDFILE" 2>/dev/null)
+    if [ -n "$old" ] && [ "$old" != "$$" ] && [ -d "/proc/$old" ]; then
+        log "another wipe-guard is already running (pid $old) - exiting"
+        exit 0
+    fi
+fi
+echo $$ > "$PIDFILE" 2>/dev/null
 
 log "=== wipe-guard started (pid $$) ==="
 if [ -f "$STOOD_DOWN" ]; then

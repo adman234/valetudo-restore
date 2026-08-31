@@ -459,6 +459,10 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     steps.append("stopped existing Valetudo")
                 c.start_valetudo()
                 if s.restore_wipe_guard and guard:
+                    # kill any existing guard first; the script also self-checks,
+                    # but a stale pidfile should not leave two running
+                    c.run("kill $(ps | grep -v grep | grep _wipe_guard.sh "
+                          "| awk '{print $1}') 2>/dev/null; rm -f /data/_wipe_guard.pid")
                     c.start_guard()
                 steps.append("valetudo started")
 
