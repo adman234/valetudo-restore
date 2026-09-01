@@ -121,8 +121,15 @@ def index(request: Request):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
+    cur = load_settings()
+    tpl = (Path(__file__).parent / "templates" / "settings.html").read_text("utf-8")
+    # Derive the manifest from the template itself rather than hand-maintaining
+    # a second list that could drift out of sync with the checkboxes.
+    owned = [k for k, v in cur.model_dump().items()
+             if isinstance(v, bool) and ('name="%s"' % k) in tpl]
     return templates.TemplateResponse("settings.html", {
-        "request": request, "s": load_settings(), "version": __version__,
+        "request": request, "s": cur, "version": __version__,
+        "form_bools": ",".join(owned),
     })
 
 
@@ -143,9 +150,14 @@ async def settings_save(request: Request):
                 pass
         else:
             cur[k] = v
-    # unchecked checkboxes are simply absent from the form body
-    for k, v in load_settings().model_dump().items():
-        if isinstance(v, bool) and k not in form:
+    # Unchecked checkboxes are simply absent from the form body, so absence has
+    # to mean false - but ONLY for booleans this form actually renders. Applying
+    # it to every bool in the model silently forced fields with no checkbox to
+    # false on the first save; that is how backup_voice_pack got turned off and
+    # stayed off, with no control to turn it back on.
+    owned = {k for k in str(form.get("_form_bools", "")).split(",") if k}
+    for k, v in cur.items():
+        if isinstance(v, bool) and k in owned and k not in form:
             cur[k] = False
     try:
         s = Settings(**cur)

@@ -316,7 +316,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_BACKUP_HOUR` | `2` | hour (0–23) |
 | `VR_BACKUP_MINUTE` | `30` | minute (0–59) |
 | `VR_KEEP_BACKUPS` | `14` | how many archives to retain |
-| `VR_BACKUP_VOICE_PACK` | `true` | include `/data/personalized_voice` (a few MB per backup) |
+| `VR_BACKUP_VOICE_PACK` | `true` | include `/data/personalized_voice` (~5 MB gzipped per backup) |
 | `VR_MONITOR_ENABLED` | `true` | enable monitoring |
 | `VR_POLL_INTERVAL_MINUTES` | `5` | how often to poll |
 | `VR_CONFIRM_SAMPLES` | `2` | consecutive identical verdicts required before acting |

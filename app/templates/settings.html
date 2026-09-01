@@ -5,6 +5,10 @@
 {% endif %}
 
 <form method="post" action="/settings" class="panel">
+  <!-- Booleans this form actually renders. The POST handler treats a bool as
+       "unchecked" only if it is named here, so a field added to the model but
+       not to this template can never be silently forced to false. -->
+  <input type="hidden" name="_form_bools" value="{{ form_bools }}">
   <h2>Robot connection</h2>
   <div class="grid">
     <label>Host <input name="robot_host" value="{{ s.robot_host }}" required></label>
@@ -24,7 +28,15 @@
     <label>Hour <input name="backup_cron_hour" type="number" min="0" max="23" value="{{ s.backup_cron_hour }}"></label>
     <label>Minute <input name="backup_cron_minute" type="number" min="0" max="59" value="{{ s.backup_cron_minute }}"></label>
     <label>Keep backups <input name="keep_backups" type="number" min="1" max="365" value="{{ s.keep_backups }}"></label>
+    <label class="check"><input type="checkbox" name="backup_voice_pack" {% if s.backup_voice_pack %}checked{% endif %}> Include voice pack</label>
   </div>
+  <p class="hint">
+    The <strong>voice pack</strong> is user-installed audio under
+    <code>/data/personalized_voice</code> &mdash; a few MB that a wipe destroys and
+    that Valetudo can only reinstall from the original URL + hash. Leave it on
+    unless backup size is a problem; the URL/hash fields below are the fallback
+    if you turn it off.
+  </p>
   <p class="hint">
     Schedule the backup <em>before</em> the robot's own nightly reboot (03:00&ndash;05:00
     on Dreame firmware), so a wipe during that reboot is captured with fresh data.
