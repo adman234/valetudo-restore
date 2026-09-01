@@ -417,11 +417,24 @@ class RobotClient:
         """
         Stop ava and miio_client so map files can be swapped underneath them.
 
-        maploader does exactly this rather than rebooting: with ava running, it
-        holds the map open and will rewrite or discard whatever you put there.
+        maploader does this rather than rebooting: with ava running it holds the
+        map open and will rewrite or discard whatever you put there.
+
+        SIGTERM first, and only SIGKILL if it will not go. maploader uses
+        `killall -9` outright, but ava holds vendor config and map state in
+        memory and SIGKILL gives it no chance to flush - doing that repeatedly
+        is a plausible way to corrupt exactly the state whose corruption
+        triggers a factory reset. Not worth the risk for the sake of a few
+        seconds.
         """
         self.run("sh /etc/rc.d/miio.sh stop", timeout=60)
-        self.run("killall -9 ava", timeout=60)
+        self.run("killall ava", timeout=60)
+        for _ in range(10):
+            if not self.run("pidof ava")[1].strip():
+                return
+            self.run("sleep 1")
+        log.warning("ava did not exit on SIGTERM; escalating to SIGKILL")
+        self.run("killall -9 ava", timeout=30)
 
     def start_map_processes(self) -> None:
         self.run("sh /etc/rc.d/ava.sh >/dev/null 2>&1 &", timeout=60)
