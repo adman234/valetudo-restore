@@ -45,8 +45,10 @@ class Settings(BaseModel):
     auto_restore: bool = False
     max_restore_attempts: int = Field(3, ge=1, le=10)
     restore_window_hours: int = Field(6, ge=1, le=168)
-    # Reinstall the wipe-guard + boot hook alongside Valetudo itself.
-    restore_wipe_guard: bool = True
+    # Reinstall the wifi-keeper + boot hook alongside Valetudo itself.
+    # The boot hook is NOT optional in practice: /etc/rc.sysinit:73 is the only
+    # thing that starts Valetudo, and it carries VALETUDO_CONFIG_PATH.
+    restore_wifi_keeper: bool = True
 
     # --- notifications ---
     notify_on_wipe: bool = True
@@ -101,7 +103,7 @@ ENV_MAP = {
     "VR_AUTO_RESTORE": "auto_restore",
     "VR_MAX_RESTORE_ATTEMPTS": "max_restore_attempts",
     "VR_RESTORE_WINDOW_HOURS": "restore_window_hours",
-    "VR_RESTORE_WIPE_GUARD": "restore_wipe_guard",
+    "VR_RESTORE_WIFI_KEEPER": "restore_wifi_keeper",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",
     "VR_NOTIFY_ON_WIPE": "notify_on_wipe",

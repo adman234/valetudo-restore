@@ -1,14 +1,14 @@
 # valetudo-restore
 
-Stop rooted Dreame/Mova robots from factory-resetting themselves — and repair
-them when they misbehave, **without** losing your map.
+Survive a rooted Dreame/Mova robot factory-resetting itself — **without** losing
+your map.
 
 The firmware's answer to a crashing `ava` is to `rm -rf /data`. That destroys
 Valetudo, its settings, the voice pack, and your map with all its room names,
-zones and floor materials — and the map is the one thing that **cannot** be
-restored afterwards. This keeps the robot out of that state, and falls back to
-progressively narrower repairs that preserve the map where the firmware would
-not.
+zones and floor materials. Restoring the map is possible but fiddly, and getting
+it wrong silently discards the slot on the next boot. This backs up everything
+that matters nightly, notices the moment a wipe happens, and puts it all back —
+map included — in one click.
 
 Runs as a single Docker container with a web UI. Built for Unraid, but it's
 plain Docker and runs anywhere.
@@ -63,22 +63,22 @@ You can, however, make the firmware unable to reach the wipe. See below.
 
 ---
 
-## Preventing the wipe — and repairing without one
+## Recovering from the wipe
 
-The firmware's only repair is "delete everything and hope". It does work — a
+The firmware's only repair is "delete everything and hope". It does work &mdash; a
 wipe cleared a crash loop immediately on 2026-08-31, so the bad state really was
-in `/data` — but it takes Valetudo, the map, the room names and the voice pack
-with it.
+in `/data` &mdash; but it takes Valetudo, the map, the room names and the voice
+pack with it.
 
-A map **can** be restored, provided the backup is complete - see *Restoring the
-map* below. Restoring only `/data/map` does not work: `ava` treats the map as
+A map **can** be restored, provided the backup is complete &mdash; see *Restoring
+the map* below. Restoring only `/data/map` does not work: `ava` treats the map as
 invalid and discards the slot on the next boot. It needs `/data/ri` and
 `/data/DivideMap` too.
 
-Still, avoiding the wipe is far better than recovering from one, because a wipe
-also takes Valetudo, its settings and the voice pack.
+So the answer this tool settled on is a complete, verified backup and a fast
+restore &mdash; not an attempt to stop the firmware.
 
-### Blocking the wipe
+### Why not block the wipe? (a dead end worth documenting)
 
 `monitor.sh` decides between rebooting and wiping with:
 
@@ -91,65 +91,90 @@ fi
 ```
 
 `-f` tests for a *regular file*, so holding the mark as a **directory** makes
-that test true forever and the firmware never calls `factory_reset.sh`:
-
-```sh
-rm -f /data/sys_auto_reboot.mark && mkdir -p /data/sys_auto_reboot.mark
-```
-
+that test true forever and the firmware never calls `factory_reset.sh`.
 `touch` on a directory only updates mtime and `rm -f` on one fails, so the mark
 survives both the firmware's `touch` and the nightly `check_restart_ava.sh`.
 
-### Standing down
+It works exactly as described. **It was still removed**, because over three
+incidents it was net-negative:
 
-Blocking the wipe forever is not free. On 2026-08-31 `ava` began crashing on
-every boot; the guard held, so nothing was lost, but the robot then rebooted
-every ~194s for **days** because the firmware's own repair was permanently
-blocked. Letting the reset happen fixed `ava` immediately.
+| Incident | Outcome |
+|---|---|
+| `ava` crash-looping on every boot | Guard held, nothing lost &mdash; but the robot rebooted every ~194s for **days**, because the firmware's own repair was blocked. The wipe fixed `ava` instantly. |
+| Wipe at 17:17 | Guard's stand-down had already fired. It delayed the wipe by ~18 minutes and changed nothing. |
+| Wipe at 12:15 | Guard did not prevent it. |
 
-So after **6 consecutive boots** where `ava` never becomes healthy, the guard
-removes the armor and lets the firmware factory-reset. Transient faults stay
-protected; a genuinely broken robot is not held hostage. The counter resets the
-moment `ava` is healthy.
+Blocking a `rm -rf` you can already recover from, at the cost of hiding a broken
+robot behind a reboot loop, is the wrong trade. Complete backups are the better
+answer. The code and the option are gone; this section stays so the idea does not
+get reinvented.
 
-The guard also re-asserts wifi power-save off every 60s. The dustbuilder boot
-template tries at ~9s uptime, but `wlan0` does not associate until ~15s, so the
-boot-time attempt fails and the driver re-enables it on every roam.
+### What is still installed: wifi-keeper
 
-### Installing the guard
+One piece of the old guard was doing measurable work and survives as
+`guard/wifi-keeper.sh`. The dustbuilder boot template does:
 
 ```sh
-scp -O guard/_wipe_guard.sh root@<robot>:/data/_wipe_guard.sh   # or pipe via cat
-ssh root@<robot> 'chmod +x /data/_wipe_guard.sh'
+echo 0 > /sys/module/8189fs/parameters/rtw_power_mgnt
+iw dev wlan0 set power_save off
 ```
 
-Add it to the boot hook (the tool does this automatically on restore):
+but `/data/_root_postboot.sh` runs at roughly 9s uptime and `wlan0` does not
+associate until about 15s, so **both fail at boot** &mdash; `iw` has no interface
+to talk to yet. The 8189fs driver also re-enables power management on every
+re-association, so a robot that roams between APs drifts back on its own.
+
+Left alone, power-save stays ON, and the robot becomes intermittently
+unreachable. That shows up as bogus "robot was wiped" alerts and as
+`Socket is closed` part-way through a large SSH upload. `wifi-keeper` re-asserts
+both settings every 60s and logs each correction to `/data/wifi-keeper.log`.
+
+### Installing it
 
 ```sh
-if [ -x /data/_wipe_guard.sh ]; then
-        /data/_wipe_guard.sh > /dev/null 2>&1 &
+cat guard/wifi-keeper.sh | ssh root@<robot> 'cat > /data/wifi-keeper.sh && chmod +x /data/wifi-keeper.sh'
+```
+
+Then add it to the boot hook &mdash; the tool does this automatically on restore:
+
+```sh
+if [ -x /data/wifi-keeper.sh ]; then
+        /data/wifi-keeper.sh > /dev/null 2>&1 &
 fi
 ```
 
-### Optional: block every caller
+### The boot hook is not optional
 
-Create `/data/_wipe_guard.block_all` to also hold `/tmp/factory_reset.txt`, the
-mutex `factory_reset.sh` checks on entry. That blocks **every** caller including
-`monitor_disk_full` and the physical reset button. Off by default, since it
-disables deliberate factory resets too.
+`/data/_root_postboot.sh` is invoked from `/etc/rc.sysinit`:
+
+```sh
+[ -f /data/_root_postboot.sh ] && sh /data/_root_postboot.sh
+```
+
+That line is the **only** thing on the robot that starts Valetudo &mdash; nothing
+in `/etc/rc.d`, `/etc/init.d` or `/etc/crontabs` references it. The hook also
+sets `VALETUDO_CONFIG_PATH=/data/valetudo_config.json`; without that env var
+Valetudo writes its config to `/tmp`, which is tmpfs, so **every setting is lost
+at the next reboot**. This is what caused the "I rebooted and my schedules were
+gone" symptom.
+
+A restore therefore always rebuilds the hook from `/misc/_root_postboot.sh.tpl`,
+the dustbuilder template, rather than hand-rolling a `/data/valetudo &` line.
 
 ---
 
 ## What it does
 
-- **Wipe guard** — blocks the firmware's `rm -rf /data` outright
-- **Bounded** — stands down after 6 failed boots so a genuinely broken robot
-  can still reach the firmware's own repair
 - **Nightly backup** of everything that matters, pulled over SSH
 - **Monitoring** every N minutes with five distinct states
 - **Notifications** via webhook (Home Assistant, ntfy, Discord, …)
 - **Auto-restore** — off by default, opt-in
 - **Retention** — keep the newest N archives, prune the rest
+- **Complete map restore** — `/data/ri` + `/data/map` + `/data/DivideMap`, which
+  is the only combination `ava` accepts
+- **Diagnostics capture** — pulls the crash logs off the robot *before* the
+  firmware deletes them
+- **wifi-keeper** — keeps wifi power-save off, which the boot template fails to do
 - **Web UI** for configuration, manual backup/restore and an event log
 
 Backups still matter: they carry Valetudo's config, timers, MQTT, the voice
@@ -162,7 +187,7 @@ of an archive. They are what makes a re-map bearable if it ever comes to that.
 | Source | Why |
 |---|---|
 | `/data/valetudo_config.json` | MQTT settings, schedules, everything you configured |
-| `/data/_wipe_guard.sh` | wipe-guard, if installed |
+| `/data/wifi-keeper.sh` | wifi power-save keeper, if installed |
 | `/data/_root_postboot.sh` | boot hook |
 | `/data/log/factory_reset.log` | wipe history — the audit trail |
 | `/data/config` | vendor config, incl. room names and quirks |
@@ -298,7 +323,12 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_AUTO_RESTORE` | `false` | restore automatically on a confirmed wipe |
 | `VR_MAX_RESTORE_ATTEMPTS` | `3` | attempts allowed per window |
 | `VR_RESTORE_WINDOW_HOURS` | `6` | the window for the above |
-| `VR_RESTORE_WIPE_GUARD` | `true` | also reinstall the wipe-guard and boot hook |
+| `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
+| `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
+| `VR_RESTORE_DUSTSTREAMER` | `true` | reinstall duststreamer if the backup has it |
+| `VR_DUSTSTREAMER_URL` | *(Hypfer release)* | fallback download when the backup has no copy |
+| `VR_VOICE_PACK_URL` | *(empty)* | recorded for rebuilds; Valetudo does not store it |
+| `VR_VOICE_PACK_HASH` | *(empty)* | md5 that pairs with the above |
 | `VR_WEBHOOK_URL` | *(empty)* | notification webhook; empty disables notifications |
 | `VR_WEBHOOK_HEADERS` | *(empty)* | extra headers as JSON, e.g. `{"Authorization":"Bearer x"}` |
 | `VR_NOTIFY_ON_WIPE` | `true` | notify when a wipe is detected |
@@ -361,7 +391,7 @@ A backup captures more than an automatic restore writes back, deliberately.
 |---|---|
 | Valetudo binary | `/data/map` — map, rooms, no-go zones |
 | `valetudo_config.json` (all settings) | `/data/config` — vendor/ava config |
-| `_wipe_guard.sh` | `/mnt/misc` — calibration |
+| `wifi-keeper.sh` | `/mnt/misc` — calibration |
 | `_root_postboot.sh` boot hook | `/mnt/private` — **never written** |
 
 So after an auto-restore you get Valetudo and every one of its settings back.

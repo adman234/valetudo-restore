@@ -350,7 +350,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     return None
 
             cfg = member("valetudo_config.json")
-            guard = member("_wipe_guard.sh")
+            guard = member("wifi-keeper.sh")
             voice = member("personalized_voice.tar.gz")
             dust = member("duststreamer")
             vendor_cfg = member("data_config.tar.gz")
@@ -384,10 +384,10 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 else:
                     steps.append("no config in backup - Valetudo will start fresh")
 
-                # 3. wipe guard
-                if s.restore_wipe_guard and guard:
+                # 3. wifi-keeper
+                if s.restore_wifi_keeper and guard:
                     c.write_file(R.P_GUARD, guard, mode="0755")
-                    steps.append("wipe-guard restored")
+                    steps.append("wifi-keeper restored")
 
                 # 3b. voice pack - user-installed audio a wipe destroys.
                 # /data/config/ava/language_in_use (restored with the vendor
@@ -447,7 +447,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
 
                 # 4. boot hook from the rootfs template
                 try:
-                    c.rebuild_boot_hook(include_guard=bool(s.restore_wipe_guard and guard))
+                    c.rebuild_boot_hook(include_keeper=bool(s.restore_wifi_keeper and guard))
                     steps.append("boot hook rebuilt from /misc template")
                 except Exception as e:
                     steps.append("boot hook rebuild FAILED: %s" % e)
@@ -486,11 +486,11 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 if c.stop_valetudo():
                     steps.append("stopped existing Valetudo")
                 c.start_valetudo()
-                if s.restore_wipe_guard and guard:
+                if s.restore_wifi_keeper and guard:
                     # kill any existing guard first; the script also self-checks,
                     # but a stale pidfile should not leave two running
-                    c.run("kill $(ps | grep -v grep | grep _wipe_guard.sh "
-                          "| awk '{print $1}') 2>/dev/null; rm -f /data/_wipe_guard.pid")
+                    c.run("kill $(ps | grep -v grep | grep wifi-keeper.sh "
+                          "| awk '{print $1}') 2>/dev/null; rm -f /data/wifi-keeper.pid")
                     c.start_guard()
                 steps.append("valetudo started")
 
@@ -529,8 +529,7 @@ DIAG_DIR = BACKUP_DIR / "diagnostics"
 DIAG_ITEMS = [
     ("/tmp/log", "tmp_log.tar.gz", True),        # crash dumps + ava's own logs
     ("/data/log", "data_log.tar.gz", True),
-    ("/data/_wipe_guard.log", "wipe_guard.log", False),
-    ("/data/_wipe_guard.escalations", "escalations", False),
+    ("/data/wifi-keeper.log", "wifi_keeper.log", False),
     ("/data/ava_reboot_cnt", "ava_reboot_cnt", False),
 ]
 

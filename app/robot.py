@@ -35,7 +35,7 @@ LF = b"\n"
 # Paths on the robot
 P_VALETUDO = "/data/valetudo"
 P_CONFIG = "/data/valetudo_config.json"
-P_GUARD = "/data/_wipe_guard.sh"
+P_GUARD = "/data/wifi-keeper.sh"
 P_POSTBOOT = "/data/_root_postboot.sh"
 P_POSTBOOT_TPL = "/misc/_root_postboot.sh.tpl"
 P_FACTORY_LOG = "/data/log/factory_reset.log"
@@ -68,7 +68,7 @@ DUSTSTREAMER_ITEM = ("/data/duststreamer", "duststreamer", False)
 # What a backup captures: (remote_path, archive_member_name, is_dir)
 BACKUP_ITEMS = [
     ("/data/valetudo_config.json", "valetudo_config.json", False),
-    ("/data/_wipe_guard.sh", "_wipe_guard.sh", False),
+    ("/data/wifi-keeper.sh", "wifi-keeper.sh", False),
     ("/data/_root_postboot.sh", "_root_postboot.sh", False),
     ("/data/log/factory_reset.log", "factory_reset.log", False),
     ("/data/config", "data_config.tar.gz", True),
@@ -325,7 +325,7 @@ class RobotClient:
             "echo __VR_OK__; "
             "[ -x %s ] && echo BIN=1 || echo BIN=0; "
             "[ -f %s ] && echo CFG=1 || echo CFG=0; "
-            "ps | grep -v grep | grep -q _wipe_guard.sh && echo GUARD=1 || echo GUARD=0; "
+            "ps | grep -v grep | grep -q wifi-keeper.sh && echo GUARD=1 || echo GUARD=0; "
             "pidof valetudo >/dev/null && echo VAL=1 || echo VAL=0; "
             "echo UP=$(cut -d. -f1 /proc/uptime); "
             "echo __FRLOG__; cat %s 2>/dev/null"
@@ -357,7 +357,7 @@ class RobotClient:
         return p
 
     # ---------- restore helpers ----------
-    def rebuild_boot_hook(self, include_guard: bool = True) -> str:
+    def rebuild_boot_hook(self, include_keeper: bool = True) -> str:
         """
         Rebuild /data/_root_postboot.sh from the dustbuilder template.
 
@@ -372,9 +372,9 @@ class RobotClient:
         if not self.path_exists(P_POSTBOOT_TPL):
             raise FileNotFoundError(P_POSTBOOT_TPL + " missing on rootfs")
         self.run("cp %s %s" % (P_POSTBOOT_TPL, P_POSTBOOT))
-        if include_guard:
+        if include_keeper:
             block = (
-                "\n# wipe-guard (valetudo-restore)\n"
+                "\n# wifi-keeper (valetudo-restore)\n"
                 "if [ -x " + P_GUARD + " ]; then\n"
                 "        " + P_GUARD + " > /dev/null 2>&1 &\n"
                 "fi\n"
