@@ -518,6 +518,91 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
 
 
 # --------------------------------------------------------------------------
+# diagnostics
+# --------------------------------------------------------------------------
+DIAG_DIR = BACKUP_DIR / "diagnostics"
+
+# What to grab when ava is in trouble. All of this is destroyed by a reboot
+# (/tmp) or by the wipe itself (/data/log), which is why three separate
+# incidents produced no usable evidence: by the time anyone looked, the crash
+# dump was already gone.
+DIAG_ITEMS = [
+    ("/tmp/log", "tmp_log.tar.gz", True),        # crash dumps + ava's own logs
+    ("/data/log", "data_log.tar.gz", True),
+    ("/data/_wipe_guard.log", "wipe_guard.log", False),
+    ("/data/_wipe_guard.escalations", "escalations", False),
+    ("/data/ava_reboot_cnt", "ava_reboot_cnt", False),
+]
+
+
+def capture_diagnostics(reason: str, force: bool = False) -> dict:
+    """
+    Pull ava's crash evidence off the robot before it is destroyed.
+
+    Rate-limited to once every 10 minutes so a crash loop does not fill the
+    volume - a single capture is a few hundred KB to a couple of MB.
+    """
+    s = load_settings()
+    last = store.kv_get("last_diag", 0)
+    if not force and time.time() - last < 600:
+        return {"ok": False, "skipped": "rate-limited (one capture per 10 min)"}
+
+    DIAG_DIR.mkdir(parents=True, exist_ok=True)
+    name = "diag-%s.tar.gz" % _stamp()
+    path = DIAG_DIR / name
+    got, meta = [], {"reason": reason, "created": datetime.now(timezone.utc).isoformat()}
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            meta["uptime_s"] = p.uptime_s
+            meta["ava_running"] = bool(c.run("pidof ava")[1].strip())
+            meta["factory_log"] = p.factory_log
+            for cmd, key in (("dmesg | tail -200", "dmesg"),
+                             ("ps", "ps"),
+                             ("df -h", "df"),
+                             ("free -m", "free"),
+                             ("ls -la /tmp/log/", "tmp_log_listing")):
+                meta[key] = c.run(cmd, timeout=45)[1][-8000:]
+
+            tmp = path.with_suffix(".part")
+            with tarfile.open(tmp, "w:gz") as tar:
+                for remote, member, is_dir in DIAG_ITEMS:
+                    try:
+                        if not c.path_exists(remote):
+                            continue
+                        if is_dir:
+                            c.run("tar -czf /tmp/_vr_d.tgz -C %s . 2>/dev/null"
+                                  % R._q(remote), timeout=120)
+                            data = c.read_file("/tmp/_vr_d.tgz", timeout=180)
+                            c.run("rm -f /tmp/_vr_d.tgz")
+                        else:
+                            data = c.read_file(remote)
+                        info = tarfile.TarInfo(member); info.size = len(data)
+                        info.mtime = int(time.time())
+                        tar.addfile(info, io.BytesIO(data))
+                        got.append(member)
+                    except Exception as e:
+                        log.warning("diag item %s failed: %s", remote, e)
+                md = json.dumps(meta, indent=2, default=str).encode()
+                mi = tarfile.TarInfo("meta.json"); mi.size = len(md)
+                mi.mtime = int(time.time()); tar.addfile(mi, io.BytesIO(md))
+            tmp.replace(path)
+
+        store.kv_set("last_diag", int(time.time()))
+        store.log_event("info", "diagnostics",
+                        "captured %s (%s): %s" % (name, reason, ", ".join(got)))
+        # keep the newest 20
+        for old in sorted(DIAG_DIR.glob("diag-*.tar.gz"))[:-20]:
+            old.unlink(missing_ok=True)
+        return {"ok": True, "file": name, "items": got,
+                "size": path.stat().st_size}
+    except Exception as e:
+        log.exception("diagnostic capture failed")
+        store.log_event("warn", "diagnostics", "capture FAILED (%s): %s" % (reason, e))
+        return {"ok": False, "error": str(e)}
+
+
+# --------------------------------------------------------------------------
 # monitoring
 # --------------------------------------------------------------------------
 def restart_valetudo() -> dict:
@@ -797,6 +882,12 @@ def monitor_tick() -> dict:
     if state == STATE_HEALTHY:
         store.kv_set("restore_attempts", {"n": 0, "t0": 0})
         return {"state": state, "streak": streak, "acted": False}
+
+    # Grab the evidence NOW, on the first sighting, while /tmp still holds the
+    # crash dump. A reboot clears /tmp and a wipe clears /data/log, so waiting
+    # for confirmation means capturing nothing.
+    if state == STATE_CRASHED and prev.get("state") != STATE_CRASHED:
+        capture_diagnostics("ava crashed (monitor saw CRASHED)")
 
     if state in (STATE_OFFLINE, STATE_NO_SSH):
         # Never auto-act on an unverified state.

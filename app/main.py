@@ -256,6 +256,30 @@ def api_reboot_robot():
     return service.reboot_robot()
 
 
+@app.post("/api/capture-diagnostics")
+def api_capture_diag():
+    return service.capture_diagnostics("manual", force=True)
+
+
+@app.get("/api/diagnostics")
+def api_list_diag():
+    d = service.DIAG_DIR
+    if not d.exists():
+        return []
+    return sorted(
+        ({"filename": p.name, "size": p.stat().st_size, "ts": int(p.stat().st_mtime)}
+         for p in d.glob("diag-*.tar.gz")),
+        key=lambda x: x["ts"], reverse=True)
+
+
+@app.get("/api/diagnostics/{filename}")
+def api_get_diag(filename: str):
+    p = (service.DIAG_DIR / filename).resolve()
+    if p.parent != service.DIAG_DIR.resolve() or not p.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(p, filename=filename, media_type="application/gzip")
+
+
 @app.post("/api/test-webhook")
 def api_test_webhook():
     return service.test_webhook()
