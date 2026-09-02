@@ -709,10 +709,16 @@ def _swap_map_paths(c, have, vendor_map, steps) -> str:
 
 
 def _read_map_members(tar):
-    """Pull the map components + mult_map.json out of an open backup archive."""
+    """
+    Pull the map components + mult_map.json out of an open backup archive.
+
+    MAP_EXTRA_PATHS ride along in `have` but are deliberately excluded from
+    `missing`: they are restored when present and skipped when not, so their
+    absence can never block a map restore.
+    """
     names = set(tar.getnames())
     have = {}
-    for remote, member, is_dir in R.MAP_PATHS:
+    for remote, member, is_dir in R.MAP_PATHS + R.MAP_EXTRA_PATHS:
         if member in names:
             have[member] = (remote, tar.extractfile(member).read(), is_dir)
     vendor_map = None

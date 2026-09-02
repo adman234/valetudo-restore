@@ -63,6 +63,16 @@ MAP_PATHS = [
 # duststreamer is the camera-streaming binary. Like Valetudo it lives on /data
 # and is destroyed by a wipe, and like Valetudo it is a single static binary -
 # so it is captured when present and put back on restore.
+# Map-scoped data restored ALONGSIDE the map but not required for it to be
+# considered complete. /data/DivideAI/ai_result/<slot>/ai_floors_large.txt holds
+# the per-room floor material the robot detected ("wood", "ceramic",
+# "shorthaired_carpet"). The numeric per-room material in /data/ri survives a
+# restore on its own, but without this the detection layer comes back empty and
+# rooms read as generic until the robot re-derives it on a later clean.
+MAP_EXTRA_PATHS = [
+    ("/data/DivideAI", "data_divideai.tar.gz", True),
+]
+
 DUSTSTREAMER_ITEM = ("/data/duststreamer", "duststreamer", False)
 
 # What a backup captures: (remote_path, archive_member_name, is_dir)
@@ -81,8 +91,7 @@ BACKUP_ITEMS = [
     ("/data/clean_record.json", "clean_record.json", False),         # consumable counters
     ("/data/ai_model_inuse.json", "ai_model_inuse.json", False),     # AI model versions
     ("/data/zt_conmon_file", "zt_conmon_file.tar.gz", True),         # robot state + map bookkeeping
-    ("/data/DivideAI", "data_divideai.tar.gz", True),                # AI obstacle data
-] + MAP_PATHS + [DUSTSTREAMER_ITEM]
+] + MAP_PATHS + MAP_EXTRA_PATHS + [DUSTSTREAMER_ITEM]
 
 # Optional extras, controlled by settings. The voice pack is user-installed
 # content of a few MB: /data/config/ava/language_in_use records WHICH pack is

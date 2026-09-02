@@ -192,6 +192,7 @@ of an archive. They are what makes a re-map bearable if it ever comes to that.
 | `/data/log/factory_reset.log` | wipe history — the audit trail |
 | `/data/config` | vendor config, incl. room names and quirks |
 | `/data/ri`, `/data/map`, `/data/DivideMap`, `/data/DivideDebug`, `/data/log/map_info.bin` | **the complete map** — all of these, or it will not load |
+| `/data/DivideAI` | per-room floor material the robot detected; restored with the map |
 | `/mnt/misc` | calibration, LDS config, consumables |
 | `/mnt/private` | **irreplaceable** per-robot identity (did/key/sn/mac/cpuid) |
 | `/data/personalized_voice` | installed voice packs (optional, on by default) |
@@ -418,6 +419,23 @@ directly, as maploader does, works and is far simpler.
 The real cause of every failed map restore before this was mundane - the backup
 was missing `/data/ri` and `/data/DivideMap`, so ava discarded the incomplete
 map. The miio investigation was an elaborate theory built on top of that bug.
+
+### Where per-room floor material lives
+
+It is stored twice, and only one copy is authoritative:
+
+| Layer | Path | Form |
+|---|---|---|
+| **Per-room setting** | `/data/ri/<slot>.dat2` → `seg_info` | numeric, e.g. `{"4":{"material":6,…}}` |
+| **Detection result** | `/data/DivideAI/ai_result/<slot>/ai_floors_large.txt` | named, e.g. `{"id":4,"material":"shorthaired_carpet"}` |
+
+The numeric codes line up with the names: `1` = wood, `2` = ceramic,
+`6` = shorthaired_carpet.
+
+Both are captured. `/data/ri` has always been restored as part of the map;
+`/data/DivideAI` is now restored alongside it, because restoring the map without
+it leaves the detection layer empty and rooms read as generic until the robot
+re-derives them on a later clean.
 
 ### Restoring the map
 
