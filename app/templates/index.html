@@ -3,21 +3,27 @@
 
 {% set st = monitor.get('state') or 'UNKNOWN' %}
 <section class="cards">
-  <div class="card status {{ st|lower }}">
+  {# app.js refreshes this card in place from /api/status; the data-st hooks
+     are what it writes to. #}
+  <div id="statuscard" class="card status {{ st|lower }}">
     <h2>Robot</h2>
-    <div class="big">{{ st }}</div>
+    <div class="big" data-st="state">{{ st }}</div>
     <div class="sub">
-      {{ s.robot_host }}
-      {% if monitor.get('streak') %}&middot; {{ monitor.streak }}x{% endif %}
+      {{ s.robot_host }}<span data-st="streak">{% if monitor.get('streak') %} &middot; {{ monitor.streak }}x{% endif %}</span>
     </div>
-    {% if monitor.get('error') %}<div class="err">{{ monitor.error }}</div>{% endif %}
-    <div class="sub">checked {{ monitor.get('ts', 0)|ts }}</div>
+    <div class="err" data-st="error"{% if not monitor.get('error') %} hidden{% endif %}>{{ monitor.get('error') or '' }}</div>
+    <div class="sub">checked <span data-st="ts">{{ monitor.get('ts', 0)|ts }}</span></div>
   </div>
 
   <div class="card">
     <h2>Last backup</h2>
     <div class="big small">{{ last_backup_ok|ts }}</div>
     <div class="sub">{{ backups|length }} kept &middot; retention {{ s.keep_backups }}</div>
+    {% if backups and not newest_full %}
+      <div class="err">No full backup kept, so restoring from the newest has nothing to use.</div>
+    {% elif newest_full and newest_full.filename != backups[0].filename %}
+      <div class="err">Newest full backup is from {{ newest_full.ts|ts }}. Newer ones are incomplete.</div>
+    {% endif %}
     <div class="sub">next at {{ s.cron_summary() }} {% if not s.backup_enabled %}(disabled){% endif %}</div>
   </div>
 
@@ -40,9 +46,9 @@
 {% if not key_present %}
 <div class="banner warn">
   <strong>No SSH key at <code>{{ s.ssh_key_path }}</code>.</strong>
-  Nothing can be backed up or restored until the key is in place &mdash;
-  upload it in <a href="/settings">Settings</a>. Note that monitoring will
-  report <code>NO_SSH</code> rather than guessing.
+  Nothing can be backed up or restored until the key is in place. Upload it in
+  <a href="/settings">Settings</a>. Until then, monitoring reports
+  <code>NO_SSH</code> rather than guessing.
 </div>
 {% endif %}
 {% if not binary_cached %}
@@ -67,16 +73,17 @@
       Reboot robot
     </button>
     <button class="danger" data-post="/api/restore" data-out="#out"
-            data-confirm="Restore EVERYTHING from the newest backup? This overwrites Valetudo, its config and the voice pack.">
-      Restore all data from newest backup
+            data-confirm="Restore EVERYTHING from the newest full backup? This overwrites Valetudo, its config and the voice pack. Backups flagged incomplete are skipped.">
+      Restore all data from newest full backup
     </button>
   </div>
   <p class="hint">
     <strong>Restart Valetudo</strong> stops and relaunches just the Valetudo
-    process &mdash; its own web UI has no restart control. It always relaunches
+    process, since its own web UI has no restart control. It always relaunches
     with <code>VALETUDO_CONFIG_PATH</code> set, so your settings stay on
-    persistent storage. <strong>Reboot robot</strong> restarts the whole machine
-    &mdash; rarely needed, since restoring a map restarts only what it has to.
+    persistent storage. <strong>Reboot robot</strong> restarts the whole
+    machine. That is rarely needed, because restoring a map restarts only what
+    it has to.
   </p>
   <pre id="out" class="out" hidden></pre>
 </section>
@@ -88,17 +95,43 @@
     <thead><tr><th>When</th><th>File</th><th>Size</th><th>Kind</th><th></th></tr></thead>
     <tbody>
     {% for b in backups %}
-      <tr{% if loop.index > 5 %} class="extra" hidden{% endif %}>
+      {% set why = b.reasons|join('; ') %}
+      {% set warn = b.filename ~ " is flagged INCOMPLETE (" ~ (why or "not checked yet") ~ "). Restoring it can replace your map and settings with what a wipe left behind." %}
+      <tr class="{% if not b.full %}incomplete{% endif %}{% if loop.index > 5 %} extra{% endif %}"{% if loop.index > 5 %} hidden{% endif %}>
         <td>{{ b.ts|ts }}</td>
-        <td class="mono">{{ b.filename }}</td>
+        <td class="mono">{{ b.filename }}
+          {% if b.reasons %}
+            <div class="reasons{% if b.override %} dim{% endif %}">
+              {% if b.override %}Flagged ({{ why }}), but marked as full by you.{% else %}{{ why }}{% endif %}
+            </div>
+          {% endif %}
+        </td>
         <td>{{ b.size|size }}</td>
-        <td>{{ b.kind }}{% if b.note %} <span class="dim">({{ b.note }})</span>{% endif %}</td>
+        <td>{{ b.kind }}{% if b.note %} <span class="dim">({{ b.note }})</span>{% endif %}
+          {% if b.override %}<span class="badge ok">full (marked)</span>
+          {% elif b.complete == 0 %}<span class="badge bad">incomplete</span>
+          {% elif b.complete is none %}<span class="badge">not checked</span>{% endif %}
+        </td>
         <td class="right">
           <a href="/api/backups/{{ b.filename }}">download</a>
+          {% if b.full %}
           <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
                   data-confirm="Restore EVERYTHING from {{ b.filename }}?">restore all</button>
           <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
                   data-confirm="Restore only the map from {{ b.filename }}?">map only</button>
+          {% else %}
+          <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
+                  data-confirm="{{ warn }} Restore EVERYTHING from it anyway?">restore all</button>
+          <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
+                  data-confirm="{{ warn }} Restore its map anyway?">map only</button>
+          {% endif %}
+          {% if b.override %}
+          <button class="link" data-post="/api/backups/{{ b.filename }}/mark-full" data-field="on=0"
+                  data-confirm="Stop treating {{ b.filename }} as full? Restore-from-newest and auto-restore will skip it again.">unmark</button>
+          {% elif b.complete == 0 %}
+          <button class="link" data-post="/api/backups/{{ b.filename }}/mark-full" data-field="on=1"
+                  data-confirm="Mark {{ b.filename }} as full? Restore-from-newest and auto-restore will be able to pick it, and retention will protect it. Only do this if you know it holds your real map and settings, for example after deliberately re-mapping.">mark as full</button>
+          {% endif %}
           <button class="link danger" data-post="/api/backups/{{ b.filename }}/delete"
                   data-confirm="Delete {{ b.filename }}?">delete</button>
         </td>
@@ -114,7 +147,14 @@
   </div>
   {% endif %}
   <p class="hint">
-    Keeping {{ s.keep_backups }}; older archives are pruned automatically.
+    Keeping {{ s.keep_backups }}; older archives are pruned automatically, except
+    that the newest full backup is never pruned.
+  </p>
+  <p class="hint">
+    <strong>Incomplete</strong> backups were taken while the robot was wiped, or
+    are missing its Valetudo config, the map, or its room names. Restoring from
+    the newest backup and auto-restore both skip them. If a flag is wrong (after
+    deliberately re-mapping, say), use <em>mark as full</em>.
   </p>
   {% else %}
     <p class="dim">No backups yet.</p>
@@ -126,7 +166,7 @@
   <p class="hint">
     Upload a backup archive and choose how much of it to put back. Use this for
     an older archive, or one kept outside this container. To restore from the
-    newest backup, use the buttons at the top.
+    newest full backup, use the buttons at the top.
   </p>
 
   <form id="restoreform" enctype="multipart/form-data" class="mapform">
@@ -146,12 +186,12 @@
     settings (MQTT, schedules), the vendor settings (obstacle images, pet
     avoidance, carpet, mop), the voice pack, duststreamer, the boot hook
     <em>and</em> the map. <strong>Restore map only</strong> touches nothing but
-    the map &mdash; use it when Valetudo is fine and only the map is missing.
+    the map. Use it when Valetudo is fine and only the map is missing.
   </p>
   <p class="hint">
     The file must be a backup archive from this tool
     (<code>valetudo-backup-….tar.gz</code>). A bare <code>data_map.tar.gz</code>
-    will not work &mdash; a map is five separate paths, not one folder.
+    will not work, because a map is five separate paths, not one folder.
   </p>
 
   <details class="hint">
@@ -162,7 +202,8 @@
       <code>map_info.bin</code>, <code>mult_map.json</code>). Restoring only
       <code>/data/map</code> produces a map <code>ava</code> rejects on the next
       boot, so an archive missing any of these is refused rather than
-      half-applied.
+      half-applied. <code>/data/DivideAI</code>, which holds the detected floor
+      material per room, is put back alongside it when the archive has it.
     </p>
     <p>
       <code>ava</code> and <code>miio_client</code> are stopped, the files are

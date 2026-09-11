@@ -9,6 +9,46 @@
     el.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
   }
 
+  // ---- robot status card -------------------------------------------------
+  // The card is rendered from the last recorded verdict, so on its own it goes
+  // stale: after a restore it kept saying WIPED until a reload. Refresh it from
+  // /api/status after any action that probed the robot, when the tab regains
+  // focus, and every 30s in the background.
+  function fmtTs(ts) {
+    if (!ts) { return "never"; }
+    return new Date(ts * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  }
+
+  function applyMonitor(m) {
+    var card = document.getElementById("statuscard");
+    if (!card || !m || !m.state) { return; }
+    card.className = "card status " + String(m.state).toLowerCase();
+    function set(key, text) {
+      var el = card.querySelector('[data-st="' + key + '"]');
+      if (el) { el.textContent = text; }
+      return el;
+    }
+    set("state", m.state);
+    set("streak", m.streak ? " · " + m.streak + "x" : "");
+    var err = set("error", m.error || "");
+    if (err) { err.hidden = !m.error; }
+    set("ts", fmtTs(m.ts));
+  }
+
+  function pollStatus() {
+    fetch("/api/status")
+      .then(function (r) { return r.json(); })
+      .then(function (d) { applyMonitor(d.monitor); })
+      .catch(function () { /* next poll will try again */ });
+  }
+
+  if (document.getElementById("statuscard")) {
+    setInterval(pollStatus, 30000);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) { pollStatus(); }
+    });
+  }
+
   document.addEventListener("click", function (ev) {
     var btn = ev.target.closest("button[data-post]");
     if (!btn) { return; }
@@ -37,6 +77,8 @@
       .then(function (r) { return r.json().catch(function () { return { status: r.status }; }); })
       .then(function (d) {
         show(out, d);
+        // Test connection, restores and restart all record a fresh verdict.
+        if (d && d.state) { pollStatus(); }
         // Reload so the tables and status cards reflect the new state.
         if (/backup|restore|delete|binary/.test(url)) {
           setTimeout(function () { window.location.reload(); }, 1200);
@@ -100,7 +142,7 @@
       show("#restoreout", "working… large archives take a minute.");
       fetch(url, { method: "POST", body: new FormData(rf) })
         .then(function (r) { return r.json(); })
-        .then(function (d) { show("#restoreout", d); })
+        .then(function (d) { show("#restoreout", d); pollStatus(); })
         .catch(function (e) { show("#restoreout", "Upload failed: " + e); })
         .finally(function () { btns.forEach(function (b) { b.disabled = false; }); });
     });

@@ -63,6 +63,15 @@ async def lifespan(app: FastAPI):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     store.init_db()
+    # Judge any backup that has no verdict yet, including every archive taken
+    # before the completeness check existed.
+    try:
+        store.reconcile_backups(BACKUP_DIR)
+        n = service.assess_pending()
+        if n:
+            log.info("assessed %d backup(s) for completeness", n)
+    except Exception:
+        log.exception("backup assessment failed")
     # First run: persist whatever the environment seeded so the UI shows it and
     # later env changes cannot silently override a UI edit.
     from .models import SETTINGS_FILE, settings_from_env
@@ -104,13 +113,16 @@ templates.env.filters["size"] = lambda n: (
 def index(request: Request):
     s = load_settings()
     store.reconcile_backups(BACKUP_DIR)
+    service.assess_pending()
     mon = store.kv_get("monitor", {})
+    backups = store.list_backups()
     return templates.TemplateResponse("index.html", {
         "request": request,
         "s": s,
         "version": __version__,
         "monitor": mon,
-        "backups": store.list_backups(),
+        "backups": backups,
+        "newest_full": service.newest_full(backups),
         "events": store.recent_events(40),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
@@ -178,12 +190,16 @@ def healthz():
 @app.get("/api/status")
 def api_status():
     s = load_settings()
+    backups = store.list_backups()
+    nf = service.newest_full(backups)
     return {
         "version": __version__,
         "monitor": store.kv_get("monitor", {}),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
-        "backups": len(store.list_backups()),
+        "backups": len(backups),
+        "incomplete_backups": sum(1 for b in backups if not b["full"]),
+        "newest_full_backup": {"filename": nf["filename"], "ts": nf["ts"]} if nf else None,
         "auto_restore": s.auto_restore,
         "key_present": Path(s.ssh_key_path).exists(),
     }
@@ -193,6 +209,8 @@ def api_status():
 def api_test():
     s = load_settings()
     state, p = service.classify(s)
+    # A real probe: record it so the status card stops showing a stale verdict.
+    service.record_state(state, p, manual=True)
     return {
         "state": state,
         "ssh_ok": p.ssh_ok,
@@ -317,7 +335,20 @@ async def api_restore_map(
 @app.get("/api/backups")
 def api_backups():
     store.reconcile_backups(BACKUP_DIR)
+    service.assess_pending()
     return store.list_backups()
+
+
+@app.post("/api/backups/{filename}/mark-full")
+def api_mark_full(filename: str, on: str = Form(default="1")):
+    """Vouch for a backup the automatic check flagged, or withdraw that."""
+    if not any(b["filename"] == filename for b in store.list_backups()):
+        raise HTTPException(404, "not found")
+    val = str(on).lower() in ("1", "true", "on", "yes")
+    store.set_override(filename, val)
+    store.log_event("info", "backup", "%s %s" % (
+        filename, "marked as full by user" if val else "no longer marked as full"))
+    return {"ok": True, "filename": filename, "marked_full": val}
 
 
 @app.get("/api/backups/{filename}")

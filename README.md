@@ -1,14 +1,14 @@
 # valetudo-restore
 
-Survive a rooted Dreame/Mova robot factory-resetting itself — **without** losing
+Survive a rooted Dreame/Mova robot factory-resetting itself, **without** losing
 your map.
 
 The firmware's answer to a crashing `ava` is to `rm -rf /data`. That destroys
 Valetudo, its settings, the voice pack, and your map with all its room names,
 zones and floor materials. Restoring the map is possible but fiddly, and getting
 it wrong silently discards the slot on the next boot. This backs up everything
-that matters nightly, notices the moment a wipe happens, and puts it all back —
-map included — in one click.
+that matters nightly, notices the moment a wipe happens, and puts it all back
+(map included) in one click.
 
 Runs as a single Docker container with a web UI. Built for Unraid, but it's
 plain Docker and runs anywhere.
@@ -22,8 +22,8 @@ config, the map and the Wi-Fi settings all disappear and `/data` comes back
 looking freshly provisioned.
 
 This is widely reported as ext4 corruption with the firmware rebuilding the
-filesystem. On the device this tool was developed against — a Mova P10 Pro
-Ultra (`r2416`) — **that is not what happens.** There is no `mkfs`, no `fsck`,
+filesystem. On the device this tool was developed against, a Mova P10 Pro
+Ultra (`r2416`), **that is not what happens.** There is no `mkfs`, no `fsck`,
 and no filesystem recreation anywhere in the path. `/usr/bin/factory_reset.sh`
 does:
 
@@ -48,13 +48,13 @@ which is why the log line reads:
 factory reset by monitor rescue brick
 ```
 
-`monitor_rescue_brick` is a literal argument in the firmware — not a
+`monitor_rescue_brick` is a literal argument in the firmware, not a
 description of disk damage. Nobody pressed reset and nothing was corrupt.
 
 The mark is cleared in exactly one place: the 03:00 cron job
 (`/usr/bin/check_restart_ava.sh`), and only if the robot is idle *and*
 responsive at that moment. If it is busy or unhealthy then, the mark survives
-indefinitely — which is why wipes look random.
+indefinitely, which is why wipes look random.
 
 **You cannot patch this.** The rootfs is a read-only squashfs, so
 `monitor.sh` and `factory_reset.sh` cannot be edited.
@@ -65,18 +65,18 @@ You can, however, make the firmware unable to reach the wipe. See below.
 
 ## Recovering from the wipe
 
-The firmware's only repair is "delete everything and hope". It does work &mdash; a
+The firmware's only repair is "delete everything and hope". It does work: a
 wipe cleared a crash loop immediately on 2026-08-31, so the bad state really was
-in `/data` &mdash; but it takes Valetudo, the map, the room names and the voice
+in `/data`. But it takes Valetudo, the map, the room names and the voice
 pack with it.
 
-A map **can** be restored, provided the backup is complete &mdash; see *Restoring
-the map* below. Restoring only `/data/map` does not work: `ava` treats the map as
+A map **can** be restored, provided the backup is complete (see *Restoring
+the map* below). Restoring only `/data/map` does not work: `ava` treats the map as
 invalid and discards the slot on the next boot. It needs `/data/ri` and
 `/data/DivideMap` too.
 
 So the answer this tool settled on is a complete, verified backup and a fast
-restore &mdash; not an attempt to stop the firmware.
+restore, not an attempt to stop the firmware.
 
 ### Why not block the wipe? (a dead end worth documenting)
 
@@ -100,7 +100,7 @@ incidents it was net-negative:
 
 | Incident | Outcome |
 |---|---|
-| `ava` crash-looping on every boot | Guard held, nothing lost &mdash; but the robot rebooted every ~194s for **days**, because the firmware's own repair was blocked. The wipe fixed `ava` instantly. |
+| `ava` crash-looping on every boot | Guard held and nothing was lost, but the robot rebooted every ~194s for **days**, because the firmware's own repair was blocked. The wipe fixed `ava` instantly. |
 | Wipe at 17:17 | Guard's stand-down had already fired. It delayed the wipe by ~18 minutes and changed nothing. |
 | Wipe at 12:15 | Guard did not prevent it. |
 
@@ -120,7 +120,7 @@ iw dev wlan0 set power_save off
 ```
 
 but `/data/_root_postboot.sh` runs at roughly 9s uptime and `wlan0` does not
-associate until about 15s, so **both fail at boot** &mdash; `iw` has no interface
+associate until about 15s, so **both fail at boot**: `iw` has no interface
 to talk to yet. The 8189fs driver also re-enables power management on every
 re-association, so a robot that roams between APs drifts back on its own.
 
@@ -135,7 +135,7 @@ both settings every 60s and logs each correction to `/data/wifi-keeper.log`.
 cat guard/wifi-keeper.sh | ssh root@<robot> 'cat > /data/wifi-keeper.sh && chmod +x /data/wifi-keeper.sh'
 ```
 
-Then add it to the boot hook &mdash; the tool does this automatically on restore:
+Then add it to the boot hook. The tool does this automatically on restore:
 
 ```sh
 if [ -x /data/wifi-keeper.sh ]; then
@@ -151,7 +151,7 @@ fi
 [ -f /data/_root_postboot.sh ] && sh /data/_root_postboot.sh
 ```
 
-That line is the **only** thing on the robot that starts Valetudo &mdash; nothing
+That line is the **only** thing on the robot that starts Valetudo. Nothing
 in `/etc/rc.d`, `/etc/init.d` or `/etc/crontabs` references it. The hook also
 sets `VALETUDO_CONFIG_PATH=/data/valetudo_config.json`; without that env var
 Valetudo writes its config to `/tmp`, which is tmpfs, so **every setting is lost
@@ -168,17 +168,20 @@ the dustbuilder template, rather than hand-rolling a `/data/valetudo &` line.
 - **Nightly backup** of everything that matters, pulled over SSH
 - **Monitoring** every N minutes with five distinct states
 - **Notifications** via webhook (Home Assistant, ntfy, Discord, …)
-- **Auto-restore** — off by default, opt-in
-- **Retention** — keep the newest N archives, prune the rest
-- **Complete map restore** — `/data/ri` + `/data/map` + `/data/DivideMap`, which
+- **Auto-restore**: off by default, opt-in
+- **Incomplete-backup detection**: a backup taken while the robot is wiped is
+  flagged, and restores skip it
+- **Retention**: keep the newest N archives, prune the rest, but never the
+  newest full one
+- **Complete map restore**: `/data/ri` + `/data/map` + `/data/DivideMap`, which
   is the only combination `ava` accepts
-- **Diagnostics capture** — pulls the crash logs off the robot *before* the
+- **Diagnostics capture**: pulls the crash logs off the robot *before* the
   firmware deletes them
-- **wifi-keeper** — keeps wifi power-save off, which the boot template fails to do
+- **wifi-keeper**: keeps wifi power-save off, which the boot template fails to do
 - **Web UI** for configuration, manual backup/restore and an event log
 
 Backups still matter: they carry Valetudo's config, timers, MQTT, the voice
-pack and — importantly — your **room names**, which live in
+pack and, importantly, your **room names**, which live in
 `/data/config/ava/ava_SchedulePositionInfo.conf` and are readable straight out
 of an archive. They are what makes a re-map bearable if it ever comes to that.
 
@@ -189,9 +192,9 @@ of an archive. They are what makes a re-map bearable if it ever comes to that.
 | `/data/valetudo_config.json` | MQTT settings, schedules, everything you configured |
 | `/data/wifi-keeper.sh` | wifi power-save keeper, if installed |
 | `/data/_root_postboot.sh` | boot hook |
-| `/data/log/factory_reset.log` | wipe history — the audit trail |
+| `/data/log/factory_reset.log` | the latest wipe entry (each wipe recreates the log, so it only ever holds one) |
 | `/data/config` | vendor config, incl. room names and quirks |
-| `/data/ri`, `/data/map`, `/data/DivideMap`, `/data/DivideDebug`, `/data/log/map_info.bin` | **the complete map** — all of these, or it will not load |
+| `/data/ri`, `/data/map`, `/data/DivideMap`, `/data/DivideDebug`, `/data/log/map_info.bin` | **the complete map**: all of these, or it will not load |
 | `/data/DivideAI` | per-room floor material the robot detected; restored with the map |
 | `/mnt/misc` | calibration, LDS config, consumables |
 | `/mnt/private` | **irreplaceable** per-robot identity (did/key/sn/mac/cpuid) |
@@ -208,7 +211,7 @@ of an archive. They are what makes a re-map bearable if it ever comes to that.
 | **Consumable counters** | `/mnt/misc/consumable.json` | ✅ via `misc.tar.gz` |
 | **Wi-Fi credentials** | `/data/config/miio/wifi.conf` | ✅ via `data_config.tar.gz` |
 
-Quirks are *not* stored by Valetudo — it reads and writes them straight through
+Quirks are *not* stored by Valetudo. It reads and writes them straight through
 to the vendor process, so they live in the vendor config and are covered by
 `data_config.tar.gz`. The voice pack is the one that needed special handling: the
 selection is a one-line file in the vendor config, but the audio is several MB
@@ -216,10 +219,10 @@ under `/data/personalized_voice`, which a wipe destroys and which cannot be
 regenerated without the original download URL.
 
 Voice-pack *installation* in Valetudo takes a URL and a hash. Those are not
-persisted anywhere on the robot — only the extracted audio is — which is why
+persisted anywhere on the robot (only the extracted audio is), which is why
 capturing the files matters if you no longer have the link.
 
-The 37 MB Valetudo binary is deliberately **not** in the archive — it is always
+The 37 MB Valetudo binary is deliberately **not** in the archive, since it is always
 re-downloadable from GitHub. It is cached separately in `/config` so restores
 work with no internet. `/mnt/private` is the part that genuinely cannot be
 regenerated.
@@ -243,6 +246,48 @@ from "SSH did not answer", and unverified states never trigger action.
 
 Verdicts must also repeat (`confirm_samples`, default 2) before anything
 happens, because a single poll catches reboots and Wi-Fi roams.
+
+The status card on the dashboard shows the last recorded verdict. Every real
+probe records one: the scheduled poll, **Test connection**, and the check that
+runs after a restore or a Valetudo restart. The card also refreshes itself every
+30 seconds and whenever the tab regains focus. A manual probe updates what is
+shown but never advances the confirmation count, so pressing Test connection
+cannot make auto-restore act sooner.
+
+### Incomplete backups
+
+A backup taken after a wipe but before a restore captures the wipe, not your
+robot. Restoring it would overwrite a recoverable robot with the placeholder
+state, and a retention window full of them would eventually delete every backup
+that could have helped. So each backup is judged when it is taken, and flagged
+**incomplete** when any of these hold:
+
+| Check | Why |
+|---|---|
+| the probe at backup time found no Valetudo binary, or no config | the robot was wiped (the same test the `WIPED` state uses) |
+| `valetudo_config.json`, `data_config.tar.gz` or any part of the map set is missing | it cannot put the robot back |
+| it has no named rooms, but the last full backup did | the map is the placeholder a wipe leaves behind; this catches a robot where Valetudo was reinstalled by hand after a wipe |
+
+A flagged backup is shown in red with its reasons, and then:
+
+- **Restore all data from newest full backup**, **map only** from the newest,
+  and **auto-restore** all use the newest *full* backup and skip newer flagged
+  ones. The result lists what was skipped.
+- **Retention never prunes the newest full backup**, even when it falls outside
+  the window.
+- You can still restore a flagged backup deliberately from its row. The
+  confirmation says why it was flagged.
+- If a flag is wrong, for example after deliberately re-mapping, **mark as
+  full** overrides it.
+
+The check deliberately ignores archive size and item count, because both move
+for legitimate reasons. Uninstalling duststreamer took one archive from 18 items
+and 3.8 MB to 17 items and 875 KB with nothing wrong, and turning on the voice
+pack adds about 5 MB. Size-based flagging would have marked that backup
+incomplete.
+
+Archives taken before this check existed are judged on their contents when the
+container starts. They carry no probe result, so only the last two checks apply.
 
 ---
 
@@ -282,7 +327,7 @@ Then open `http://<host>:8095`.
 
 ## Environment variables
 
-**None of these are strictly required** — the container starts with working
+**None of these are strictly required.** The container starts with working
 defaults and everything can be configured in the web UI. They exist so a
 deployment can be described entirely in a compose file or Unraid template.
 
@@ -298,7 +343,7 @@ every restart.
 | `VR_BACKUP_DIR` | `/backups` | where archives are written. **Mount a volume.** |
 | `VR_PORT` | `8080` | port inside the container |
 | `VR_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `TZ` | `UTC` | timezone — decides when the nightly backup actually runs |
+| `TZ` | `UTC` | timezone, which decides when the nightly backup actually runs |
 
 ### Initial configuration (optional)
 
@@ -342,7 +387,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 Booleans accept `1/true/yes/on` (case-insensitive); anything else is false.
 
 **The SSH key is not an environment variable.** Upload it through the UI, or
-place the file in the config volume yourself — putting a private key in an env
+place the file in the config volume yourself. Putting a private key in an env
 var leaks it into `docker inspect`, process listings and Unraid's template XML.
 
 Fully-specified example:
@@ -372,11 +417,11 @@ services:
 
 1. **Upload your SSH key** (Settings → Upload SSH key). This is the key you use
    to reach the robot; it is stored at `/config/valetudo_key` mode 0600.
-   Key-only auth — passwords are never accepted.
+   Key-only auth: passwords are never accepted.
 2. **Set the robot's IP** and hit **Test connection**. You want `HEALTHY`.
 3. **Cache the binary** so restores work without internet.
 4. **Back up now** once, to confirm the whole path works.
-5. Decide on **auto-restore**. Off by default — a restore writes to the robot.
+5. Decide on **auto-restore**. It is off by default, because a restore writes to the robot.
 
 Schedule the backup *before* the robot's own nightly reboot (03:00–05:00 on
 Dreame firmware), so a wipe during that reboot is captured with fresh data. The
@@ -386,22 +431,32 @@ default is 02:30.
 
 ## What a restore actually puts back
 
-A backup captures more than an automatic restore writes back, deliberately.
+**Restore all data** writes back everything a wiped robot needs, in this order:
 
-| Restored automatically | Captured, but restored only on request |
+| Step | What |
 |---|---|
-| Valetudo binary | `/data/map` — map, rooms, no-go zones |
-| `valetudo_config.json` (all settings) | `/data/config` — vendor/ava config |
-| `wifi-keeper.sh` | `/mnt/misc` — calibration |
-| `_root_postboot.sh` boot hook | `/mnt/private` — **never written** |
+| 1 | the Valetudo binary (skipped when its md5 already matches) |
+| 2 | `valetudo_config.json`: every Valetudo setting |
+| 3 | `wifi-keeper.sh` |
+| 4 | the voice pack |
+| 5 | vendor settings from `/data/config/ava`, from a curated list: pet avoidance, obstacle images, carpet, mop, room names |
+| 6 | duststreamer, from the archive or the configured URL |
+| 7 | the boot hook, rebuilt from `/misc/_root_postboot.sh.tpl` |
+| 8 | the complete map plus `/data/DivideAI`, with `ava` stopped for the swap and restarted after it (it is restarted even without a map, so the vendor settings take effect) |
+| 9 | Valetudo restarted, then a fresh probe so the dashboard shows the new state |
 
-So after an auto-restore you get Valetudo and every one of its settings back.
-The robot will still need a fresh mapping run: see the caveat under *Restoring
-the map* — map data does not survive a factory reset even when restored.
+Steps 3, 5 and 6 can each be switched off in Settings. With no archive chosen, a
+restore uses the **newest full backup** and skips any newer ones flagged
+incomplete (see *Incomplete backups*); the result lists what it skipped.
 
-`/mnt/private` holds factory identity (did/key/sn/mac/cpuid). It is backed up
-because it cannot be regenerated, and never written back because corrupting it
-can brick the robot. Restore it by hand, deliberately, if you ever truly need to.
+Some things are captured but never written back automatically:
+
+- `/mnt/misc`: calibration and consumable counters.
+- `/mnt/private`: factory identity (did/key/sn/mac/cpuid). It is backed up
+  because it cannot be regenerated, and never written back because corrupting
+  it can brick the robot. Restore it by hand, deliberately, if you ever truly
+  need to.
+- `/data/config/miio`: wifi and device identity.
 
 ### A dead end worth documenting: miio map recovery
 
@@ -441,43 +496,40 @@ re-derives them on a later clean.
 
 **The map is not a JSON file.** `/data/map` is a directory of binary SLAM data
 (`app_map.bin`, `fine_large.bin`, `wifi_fine.bin`) alongside a few JSON
-descriptors, so the transportable unit is a `.tar.gz`. Valetudo's own map
-*download* produces a `ValetudoMap` JSON — a derived rendering format that
-cannot be converted back and is not restorable.
+descriptors, and a working map needs `/data/ri` and `/data/DivideMap` as well,
+so the transportable unit is a backup archive. Valetudo's own map *download*
+produces a `ValetudoMap` JSON, which is a derived rendering format: it cannot be
+converted back and is not restorable.
 
-Dashboard → **Restore map only**. Either restore from the newest backup, or
-upload an archive — both a full backup archive and a bare `data_map.tar.gz`
-are accepted, and anything else is rejected with an explanation.
+Use **map only** on a backup row, or upload an archive under *Restore from a
+specific archive*. An archive missing any part of the map set is refused rather
+than half-applied, and so is a bare `data_map.tar.gz`.
 
-> **The map does NOT survive a factory reset.** Tested on an r2416 on
-> 2026-08-31: after a wipe, restoring `/data/map` puts the files back, but `ava`
-> deletes the map slot directory on the next boot and Valetudo reports
-> `"defaultMap": true`. This happens with or without the matching
-> `/data/config/ava/mult_map.json` registry entry restored — both were tried.
-> The SLAM map is bound to vendor state the reset clears, so an orphaned slot is
-> garbage-collected.
->
-> **After a factory reset, plan on a fresh mapping run.** Map restore is useful
-> for putting a map back on a robot that still has its vendor state — for
-> example after an accidental map reset — not for recovering from a wipe.
+> An earlier version of this README said a map does not survive a factory
+> reset. That was wrong. The backups of the time lacked `/data/ri` and
+> `/data/DivideMap`, so `ava` discarded the incomplete map on the next boot.
+> With the complete set, a map restored onto a freshly wiped robot loads with
+> its room names and floor materials.
 
 Safety properties:
 
-* the robot's current map is copied to `/data/map.bak-<timestamp>` first, so the
-  operation is reversible
-* `/mnt/private` is never touched
-* **reboot the robot afterwards** — `ava` holds the map files open and will not
-  pick up changes made underneath it
+* the robot's current map is moved to `/data/_map_replaced-<timestamp>` first,
+  so the operation is reversible (the two most recent are kept)
+* `ava` and `miio_client` are stopped for the swap and restarted afterwards, so
+  **no reboot is needed**
+* `/data/config/miio` and `/mnt/private` are never touched
 
 ### Manual controls
 
-The dashboard has three controls Valetudo's own UI does not offer:
+The dashboard has controls Valetudo's own UI does not offer:
 
-| Button | What it does |
+| Control | What it does |
 |---|---|
+| **Test connection** | probes the robot and updates the status card immediately |
 | **Restart Valetudo** | stops and relaunches just the Valetudo process |
-| **Reboot robot** | reboots the whole machine — do this after restoring a map |
-| **Restore map only** | see above |
+| **Reboot robot** | reboots the whole machine; rarely needed |
+| **map only** (per backup) | restores just the map, see above |
+| **mark as full** (per backup) | overrides an incomplete flag, see *Incomplete backups* |
 
 Restart always relaunches with `VALETUDO_CONFIG_PATH` set. Restarting it by hand
 without that variable silently moves the config to tmpfs, and every setting is
@@ -506,17 +558,21 @@ Notifications are sent as a JSON `POST` to the webhook URL:
 |---|---|
 | `test` | you press **Send test notification** |
 | `wiped` | a confirmed wipe: SSH ok, binary observed missing |
-| `wipe_detected` | a new line appeared in the robot's `factory_reset.log` |
+| `wipe_detected` | the robot's `factory_reset.log` holds a new entry |
 | `crashed` | Valetudo is installed but not running |
 | `restored` | a restore completed |
 | `restore_failed` | a restore failed |
 | `backup_failed` | a backup failed |
 
+The firmware recreates `factory_reset.log` on every wipe, so it only ever holds
+the latest entry. A new wipe is recognised by that entry changing, not by the
+log growing.
+
 ### Testing it
 
 Settings → **Send test notification** reports the **HTTP status** rather than a
 bare success/failure. That matters: Home Assistant answers `404` for a webhook
-id that does not exist — the most common misconfiguration, and indistinguishable
+id that does not exist. That is the most common misconfiguration, and indistinguishable
 from silence otherwise. The test uses *saved* settings, so save first.
 
 ### Home Assistant setup
@@ -539,7 +595,7 @@ action:
 ```
 
 `local_only: true` keeps the webhook reachable only from your LAN, which is what
-you want — the endpoint is unauthenticated.
+you want, since the endpoint is unauthenticated.
 
 To alert only on the states that actually need you, filter on the event:
 
@@ -549,7 +605,7 @@ condition:
     value_template: "{{ trigger.json.event in ['wiped', 'wipe_detected', 'restore_failed', 'backup_failed'] }}"
 ```
 
-Other targets work the same way — ntfy, Gotify and Discord all accept a JSON
+Other targets work the same way: ntfy, Gotify and Discord all accept a JSON
 POST; use **Extra headers** for anything needing an auth token.
 
 ## Notes from the field
@@ -560,17 +616,17 @@ Things that are easy to get wrong on these robots, all handled by this tool:
 Files must be streamed through `cat > dest`.
 
 **CRLF kills scripts silently.** BusyBox `ash` cannot parse CRLF and fails with
-`syntax error: unexpected end of file (expecting "then")` — the script just
+`syntax error: unexpected end of file (expecting "then")`, and the script just
 never runs. Shell scripts are normalised to LF on upload.
 
 **`VALETUDO_CONFIG_PATH` matters enormously.** Without it, Valetudo writes its
-config to `/tmp`, which is tmpfs — so every setting is silently lost at the next
+config to `/tmp`, which is tmpfs, so every setting is silently lost at the next
 reboot, looking exactly like the wipe bug. Restores rebuild the boot hook from
 `/misc/_root_postboot.sh.tpl` (on the read-only rootfs, so it survives a wipe)
 rather than hand-rolling a minimal hook, because the template also sets that
 variable, disables Wi-Fi power management and pins the timezone.
 
-**Host keys change after a wipe**, so host-key checking is disabled — pinning
+**Host keys change after a wipe**, so host-key checking is disabled. Pinning
 would break precisely when recovery is needed.
 
 **Restores are budgeted.** Repeated failures back off and stop rather than
@@ -583,16 +639,17 @@ hammering a robot that is genuinely broken.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness |
-| GET | `/api/status` | current state summary |
+| GET | `/api/status` | current state, plus `incomplete_backups` and `newest_full_backup` |
 | POST | `/api/test-connection` | probe the robot now |
 | POST | `/api/backup` | back up now |
-| POST | `/api/restore` | restore (optional `filename` form field) |
+| POST | `/api/restore` | restore everything; without `filename`, from the newest full backup |
 | POST | `/api/monitor-tick` | run one monitoring poll |
 | POST | `/api/test-webhook` | send a test notification and report the HTTP status |
-| POST | `/api/restore-map` | restore `/data/map` from an upload or a stored backup |
-| GET | `/api/backups` | list archives |
+| POST | `/api/restore-map` | restore the map from an upload or a stored backup; without `filename`, the newest full one |
+| GET | `/api/backups` | list archives, each with `full`, `complete`, `reasons` and `override` |
 | GET | `/api/backups/{file}` | download an archive |
 | POST | `/api/backups/{file}/delete` | delete an archive |
+| POST | `/api/backups/{file}/mark-full` | override an incomplete flag (`on=1`) or withdraw it (`on=0`) |
 | GET | `/api/events` | event log |
 
 Webhook payload:
@@ -615,7 +672,7 @@ Webhook payload:
 This tool holds an SSH private key with root access to a device that has a
 camera and a microphone. Keep the `/config` volume private, don't expose the
 web UI to the internet, and consider a WAN firewall block for the robot itself.
-There is no authentication on the UI — put it behind your reverse proxy if you
+There is no authentication on the UI. Put it behind your reverse proxy if you
 need one.
 
 **Backup archives contain secrets in plaintext.** A backup includes the Valetudo

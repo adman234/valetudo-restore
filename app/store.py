@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS backups (
 CREATE INDEX IF NOT EXISTS ix_backups_ts ON backups(ts DESC);
 """
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters
+# an existing table, so each one is added here when it is missing.
+MIGRATIONS = {
+    "backups": [
+        # 1 = full, 0 = incomplete, NULL = not assessed yet
+        ("complete", "INTEGER"),
+        # JSON list of human-readable reasons behind an incomplete verdict
+        ("reasons", "TEXT"),
+        # the user vouched for this backup, overriding the automatic verdict
+        ("override", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
 
 def _conn() -> sqlite3.Connection:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,6 +65,11 @@ def _conn() -> sqlite3.Connection:
 def init_db() -> None:
     with _lock, _conn() as c:
         c.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r["name"] for r in c.execute("PRAGMA table_info(%s)" % table)}
+            for name, ddl in cols:
+                if name not in have:
+                    c.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, ddl))
 
 
 # ---------- events ----------
@@ -67,14 +85,14 @@ def log_event(level: str, kind: str, message: str, detail: Any = None) -> None:
         # keep the log bounded
         c.execute(
             "DELETE FROM events WHERE id NOT IN "
-            "(SELECT id FROM events ORDER BY ts DESC LIMIT 2000)"
+            "(SELECT id FROM events ORDER BY ts DESC, id DESC LIMIT 2000)"
         )
 
 
 def recent_events(limit: int = 100) -> list[dict]:
     with _lock, _conn() as c:
         rows = c.execute(
-            "SELECT * FROM events ORDER BY ts DESC LIMIT ?", (limit,)
+            "SELECT * FROM events ORDER BY ts DESC, id DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -102,19 +120,49 @@ def kv_get(k: str, default: Any = None) -> Any:
 
 # ---------- backups ----------
 def add_backup(filename: str, size: int, kind: str, ok: bool = True,
-               note: Optional[str] = None) -> None:
+               note: Optional[str] = None, ts: Optional[int] = None) -> None:
+    """Record a backup. Its completeness is assessed separately, afterwards."""
     with _lock, _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO backups (ts, filename, size, kind, ok, note) "
             "VALUES (?,?,?,?,?,?)",
-            (int(time.time()), filename, size, kind, 1 if ok else 0, note),
+            (int(time.time()) if ts is None else int(ts), filename, size, kind,
+             1 if ok else 0, note),
         )
 
 
 def list_backups() -> list[dict]:
+    """
+    Newest first. Each row carries `full`: the ONE definition of whether a
+    backup can be trusted to put the robot back. The user's override wins over
+    the automatic verdict, and an unassessed backup is not full.
+    """
     with _lock, _conn() as c:
-        rows = c.execute("SELECT * FROM backups ORDER BY ts DESC").fetchall()
-    return [dict(r) for r in rows]
+        # ts has one-second resolution; id breaks ties, so "newest" is always
+        # well defined, and so is the order of events logged in the same second.
+        rows = c.execute("SELECT * FROM backups ORDER BY ts DESC, id DESC").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["reasons"] = json.loads(d.get("reasons") or "[]")
+        except ValueError:
+            d["reasons"] = []
+        d["full"] = bool(d.get("override")) or d.get("complete") == 1
+        out.append(d)
+    return out
+
+
+def set_assessment(filename: str, complete: bool, reasons: list) -> None:
+    with _lock, _conn() as c:
+        c.execute("UPDATE backups SET complete=?, reasons=? WHERE filename=?",
+                  (1 if complete else 0, json.dumps(reasons), filename))
+
+
+def set_override(filename: str, on: bool) -> None:
+    with _lock, _conn() as c:
+        c.execute("UPDATE backups SET override=? WHERE filename=?",
+                  (1 if on else 0, filename))
 
 
 def forget_backup(filename: str) -> None:
@@ -130,4 +178,9 @@ def reconcile_backups(backup_dir: Path) -> None:
         forget_backup(missing)
     for extra in on_disk - known:
         p = backup_dir / extra
-        add_backup(extra, p.stat().st_size, "adopted", True, "found on disk")
+        # Date it by the file, not by when it was found. Stamping adopted files
+        # with "now" made an old archive look like the newest backup, which is
+        # exactly the one a restore picks.
+        st = p.stat()
+        add_backup(extra, st.st_size, "adopted", True, "found on disk",
+                   ts=int(st.st_mtime))

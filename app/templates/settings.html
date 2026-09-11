@@ -32,7 +32,7 @@
   </div>
   <p class="hint">
     The <strong>voice pack</strong> is user-installed audio under
-    <code>/data/personalized_voice</code> &mdash; a few MB that a wipe destroys and
+    <code>/data/personalized_voice</code>: a few MB that a wipe destroys and
     that Valetudo can only reinstall from the original URL + hash. Leave it on
     unless backup size is a problem; the URL/hash fields below are the fallback
     if you turn it off.
@@ -50,7 +50,7 @@
   </div>
   <p class="hint">
     <strong>Confirm samples</strong> is how many consecutive identical readings are
-    required before acting. A single sample is noisy &mdash; wifi roaming and reboots
+    required before acting. A single sample is noisy, because wifi roaming and reboots
     both look like an outage for one poll.
   </p>
 
@@ -63,7 +63,8 @@
   <p class="hint danger-hint">
     Auto-restore writes to the robot. It only ever triggers on a
     <em>confirmed</em> state where SSH succeeded and the binary was observed
-    missing &mdash; never on an unreachable robot.
+    missing, never on an unreachable robot. It restores from the newest
+    <em>full</em> backup and skips any flagged incomplete.
   </p>
 
   <h2>What a restore puts back</h2>
@@ -76,7 +77,7 @@
     <strong>Vendor settings</strong> live in <code>/data/config/ava</code> and were
     previously skipped, which is why things like obstacle images and pet
     avoidance came back at factory defaults after a restore. A curated list is
-    restored &mdash; never <code>/data/config/miio</code> (wifi and device
+    restored, and never <code>/data/config/miio</code> (wifi and device
     identity) and never the history databases.
   </p>
 
@@ -85,12 +86,12 @@
     Valetudo installs a voice pack from a URL + hash and stores <em>neither</em>
     on the robot, so these cannot be recovered from a backup. Record them here so
     a rebuild does not depend on remembering. The pack files themselves are
-    backed up &mdash; these are the fallback. Same for
+    backed up; these are the fallback. Same for
     <code>duststreamer</code>: if a backup has no copy, it is downloaded from
     this URL during a restore. It already points at
     <a href="https://github.com/Hypfer/Duststreamer/releases">Hypfer/Duststreamer</a>
-    &mdash; only an <code>aarch64</code> build is published, which is what this
-    robot runs, so you should not need to change it.
+    (only an <code>aarch64</code> build is published, which is what this
+    robot runs), so you should not need to change it.
   </p>
   <div class="grid">
     <label class="wide">Voice pack download URL <input name="voice_pack_url" value="{{ s.voice_pack_url }}" placeholder="https://…/GORDON.tar.gz"></label>
@@ -111,7 +112,7 @@
     <button type="button" data-post="/api/test-webhook" data-out="#hookout">Send test notification</button>
   </div>
   <p class="hint">
-    Save first &mdash; the test uses the <em>saved</em> settings, not what is
+    Save first. The test uses the <em>saved</em> settings, not what is
     currently typed in the box. The result shows the HTTP status, because Home
     Assistant answers <code>404</code> for a webhook id that does not exist,
     which otherwise just looks like silence. See the README for a ready-made

@@ -175,6 +175,126 @@ def ensure_binary(s: Settings, force: bool = False) -> Path:
 # --------------------------------------------------------------------------
 # backup
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# backup completeness
+# --------------------------------------------------------------------------
+# Members every backup of a working robot has. A wipe deletes
+# valetudo_config.json, and a backup without the vendor config or the complete
+# map set cannot put the robot back the way it was.
+CRITICAL_MEMBERS = (["valetudo_config.json", "data_config.tar.gz"]
+                    + [m for _, m, _ in R.MAP_PATHS])
+
+
+def _named_rooms(cfg_tgz: bytes) -> int:
+    """Named rooms in ava_SchedulePositionInfo.conf, inside data_config.tar.gz."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(cfg_tgz)) as t:
+            f = t.extractfile("./ava/ava_SchedulePositionInfo.conf")
+            info = json.loads(f.read().decode("utf-8", "replace")) if f else {}
+    except Exception:
+        return 0
+    return sum(1 for r in (info.get("current_name_and_id") or [])
+               if isinstance(r, dict) and r.get("name"))
+
+
+def archive_facts(path: Path) -> dict:
+    """What an archive holds, as far as judging its completeness goes."""
+    with tarfile.open(path, "r:gz") as tar:
+        names = set(tar.getnames())
+        manifest = {}
+        if "manifest.json" in names:
+            try:
+                manifest = json.loads(tar.extractfile("manifest.json").read())
+            except Exception:
+                manifest = {}
+        rooms = 0
+        if "data_config.tar.gz" in names:
+            rooms = _named_rooms(tar.extractfile("data_config.tar.gz").read())
+    return {"members": names - {"manifest.json"}, "rooms": rooms,
+            "robot": manifest.get("robot_state")}
+
+
+def assess_backup(facts: dict, baseline: Optional[dict]) -> list[str]:
+    """
+    Reasons this backup cannot be trusted to put the robot back; [] if it can.
+
+    Deliberately NOT based on archive size or item count, which move for
+    legitimate reasons: uninstalling duststreamer took one archive from 18
+    items / 3.8 MB to 17 items / 875 KB with nothing wrong, and enabling the
+    voice pack adds about 5 MB. These checks look at what a wipe changes.
+    """
+    reasons = []
+    robot = facts.get("robot") or {}
+    if robot and not robot.get("binary_present"):
+        reasons.append("taken while the robot was wiped (no Valetudo binary)")
+    elif robot and not robot.get("config_present"):
+        reasons.append("taken while the robot had no Valetudo config")
+    missing = [m for m in CRITICAL_MEMBERS if m not in facts["members"]]
+    if missing:
+        reasons.append("missing %s" % ", ".join(missing))
+    if baseline and baseline.get("rooms") and not facts.get("rooms"):
+        reasons.append("no named rooms (the last full backup had %d), so the map "
+                       "is most likely the placeholder a wipe leaves behind"
+                       % baseline["rooms"])
+    return reasons
+
+
+def assess_pending() -> int:
+    """
+    Give every unassessed backup a verdict: new ones, files adopted from disk,
+    and rows from before this check existed. Oldest first, so each is compared
+    with the newest full backup that came before it. Returns how many ran.
+    """
+    cache: dict = {}
+
+    def facts_of(fn: str) -> Optional[dict]:
+        if fn not in cache:
+            try:
+                cache[fn] = archive_facts(BACKUP_DIR / fn)
+            except Exception as e:
+                log.warning("cannot read %s: %s", fn, e)
+                cache[fn] = None
+        return cache[fn]
+
+    baseline_fn = None
+    n = 0
+    for r in reversed(store.list_backups()):
+        if r["complete"] is None:
+            facts = facts_of(r["filename"])
+            if facts is None:
+                reasons = ["archive could not be read"]
+            else:
+                reasons = assess_backup(
+                    facts, facts_of(baseline_fn) if baseline_fn else None)
+            store.set_assessment(r["filename"], not reasons, reasons)
+            r["full"] = bool(r["override"]) or not reasons
+            n += 1
+        if r["full"]:
+            baseline_fn = r["filename"]
+    return n
+
+
+def newest_full(rows: Optional[list] = None) -> Optional[dict]:
+    rows = store.list_backups() if rows is None else rows
+    return next((r for r in rows if r["full"]), None)
+
+
+def _no_full_backup_msg(rows: list) -> str:
+    if not rows:
+        return "no backup available to restore"
+    return ("No full backup to restore from: all %d kept backup(s) are flagged "
+            "incomplete. Restore a specific one from the table if you are sure "
+            "it is good, or mark it as full first." % len(rows))
+
+
+def _skipped_note(rows: list, chosen: dict) -> Optional[str]:
+    newer = rows[:rows.index(chosen)]
+    if not newer:
+        return None
+    return ("skipped %d newer incomplete backup(s): %s"
+            % (len(newer), ", ".join(r["filename"] for r in newer)))
+
+
 def run_backup(kind: str = "scheduled") -> dict:
     """
     Pull the robot's irreplaceable state into a single .tar.gz.
@@ -200,6 +320,14 @@ def run_backup(kind: str = "scheduled") -> dict:
                 raise R.RobotUnreachable(probe.error or "probe failed")
             manifest["uptime_s"] = probe.uptime_s
             manifest["factory_log"] = probe.factory_log
+            # Recorded so the backup can be judged later: one taken while the
+            # robot is wiped holds the wipe, not the robot, and must never be
+            # the one a restore picks.
+            manifest["robot_state"] = {
+                "binary_present": probe.binary_present,
+                "config_present": probe.config_present,
+                "valetudo_running": probe.valetudo_running,
+            }
 
             items = list(R.BACKUP_ITEMS)
             if s.backup_voice_pack:
@@ -247,11 +375,19 @@ def run_backup(kind: str = "scheduled") -> dict:
         size = path.stat().st_size
         captured = sum(1 for i in manifest["items"] if i["status"] == "ok")
         store.add_backup(name, size, kind, True, "%d items" % captured)
-        store.log_event("info", "backup",
-                        "backup ok: %s (%d items, %d bytes)" % (name, captured, size))
+        assess_pending()
+        row = next((b for b in store.list_backups() if b["filename"] == name), {})
+        if row.get("full"):
+            store.log_event("info", "backup",
+                            "backup ok: %s (%d items, %d bytes)" % (name, captured, size))
+        else:
+            store.log_event("warn", "backup",
+                            "backup %s flagged INCOMPLETE: %s. Restores will skip it."
+                            % (name, "; ".join(row.get("reasons") or ["unknown"])))
         store.kv_set("last_backup_ok", int(time.time()))
         prune_backups(s)
-        return {"ok": True, "file": name, "size": size, "items": captured}
+        return {"ok": True, "file": name, "size": size, "items": captured,
+                "full": bool(row.get("full")), "reasons": row.get("reasons") or []}
 
     except Exception as e:
         log.exception("backup failed")
@@ -271,8 +407,18 @@ def run_backup(kind: str = "scheduled") -> dict:
 def prune_backups(s: Settings) -> int:
     """Keep the newest `keep_backups` archives; delete the rest."""
     store.reconcile_backups(BACKUP_DIR)
+    assess_pending()
     rows = store.list_backups()
     doomed = rows[s.keep_backups:]
+    # Never prune the newest full backup. If the robot sits wiped for longer
+    # than the retention window, every nightly backup is incomplete, and a
+    # count-based prune would delete the last one that can restore it.
+    keeper = newest_full(rows)
+    if keeper in doomed:
+        doomed.remove(keeper)
+        store.log_event("warn", "backup",
+                        "kept %s past retention: it is the newest full backup"
+                        % keeper["filename"])
     n = 0
     for row in doomed:
         p = BACKUP_DIR / row["filename"]
@@ -302,6 +448,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
     """
     s = load_settings()
     uploaded_tmp = None
+    skipped = None
     if blob is not None:
         # Validate before doing anything: a friendly message beats
         # "not a gzip file" from deep inside tarfile.
@@ -323,18 +470,27 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
         chosen = {"filename": "uploaded archive (%.1f MB)" % (len(blob) / 1048576)}
     else:
         store.reconcile_backups(BACKUP_DIR)
+        assess_pending()
         rows = store.list_backups()
         if filename:
             chosen = next((r for r in rows if r["filename"] == filename), None)
         else:
-            chosen = rows[0] if rows else None
+            # "Newest" means newest FULL. A backup taken after a wipe but
+            # before a restore captures the wipe, and restoring it would
+            # overwrite a recoverable robot with the placeholder state.
+            chosen = newest_full(rows)
+            if chosen:
+                skipped = _skipped_note(rows, chosen)
         if not chosen:
-            return {"ok": False, "error": "no backup available to restore"}
+            return {"ok": False, "error": ("backup not found: %s" % filename)
+                    if filename else _no_full_backup_msg(rows)}
         archive = BACKUP_DIR / chosen["filename"]
         if not archive.exists():
             return {"ok": False, "error": "backup file missing: %s" % archive.name}
 
     steps: list[str] = []
+    if skipped:
+        steps.append(skipped)
     try:
         binpath = ensure_binary(s)
         blob = binpath.read_bytes()
@@ -494,6 +650,11 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     c.start_guard()
                 steps.append("valetudo started")
 
+        # Record a fresh verdict. The dashboard shows the last recorded one,
+        # and without this it said WIPED until the next monitor poll.
+        state, after = classify(s)
+        record_state(state, after, manual=True)
+        steps.append("robot now reports %s" % state)
         store.log_event("info", "restore",
                         "restore from %s (%s)" % (chosen["filename"], reason), steps)
         if s.notify_on_restore:
@@ -502,7 +663,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                    {"reason": reason, "steps": steps})
         store.kv_set("last_restore", {"ts": int(time.time()),
                                       "file": chosen["filename"], "reason": reason})
-        return {"ok": True, "file": chosen["filename"], "steps": steps}
+        return {"ok": True, "file": chosen["filename"], "steps": steps, "state": state}
 
     except Exception as e:
         log.exception("restore failed")
@@ -642,9 +803,11 @@ def restart_valetudo() -> dict:
                     break
             steps.append("running (pid %s)" % out.strip() if back
                          else "did NOT come back")
+        state, after = classify(s)
+        record_state(state, after, manual=True)
         store.log_event("info" if back else "error", "restart",
                         "Valetudo restart: %s" % ("ok" if back else "FAILED"), steps)
-        return {"ok": back, "steps": steps,
+        return {"ok": back, "steps": steps, "state": state,
                 "note": None if back else
                         "Valetudo did not restart. Check the binary and config."}
     except Exception as e:
@@ -757,10 +920,16 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
 
     if blob is None:
         if not filename:
+            store.reconcile_backups(BACKUP_DIR)
+            assess_pending()
             rows = store.list_backups()
-            if not rows:
-                return {"ok": False, "error": "no backup available"}
-            filename = rows[0]["filename"]
+            chosen = newest_full(rows)
+            if not chosen:
+                return {"ok": False, "error": _no_full_backup_msg(rows)}
+            filename = chosen["filename"]
+            note = _skipped_note(rows, chosen)
+            if note:
+                steps.append(note)
         p = BACKUP_DIR / filename
         if not p.exists():
             return {"ok": False, "error": "backup not found: %s" % filename}
@@ -803,8 +972,10 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
                 c.start_map_processes()
                 steps.append("restarted ava + miio_client")
 
+        state, after = classify(s)
+        record_state(state, after, manual=True)
         store.log_event("info", "restore-map", "map restored", steps)
-        return {"ok": True, "steps": steps,
+        return {"ok": True, "steps": steps, "state": state,
                 "note": "Previous map moved to %s on the robot. Give ava a minute, "
                         "then check the map in Valetudo." % quarantine}
     except Exception as e:
@@ -836,6 +1007,46 @@ def classify(s: Settings) -> tuple[str, R.Probe]:
     return STATE_HEALTHY, p
 
 
+def record_state(state: str, p: R.Probe, manual: bool = False) -> tuple[dict, int]:
+    """
+    Store the verdict the dashboard shows. Every real probe goes through here:
+    the scheduled monitor, Test connection, and the check after a restore or
+    restart. Previously only the monitor wrote it, so after a restore the card
+    kept saying WIPED until the next poll.
+
+    A manual probe updates what is shown but never advances the confirmation
+    streak, so pressing Test connection cannot make auto-restore act sooner or
+    skip past the sample where the wipe notification fires.
+    """
+    prev = store.kv_get("monitor", {"state": None, "streak": 0})
+    same = prev.get("state") == state
+    if manual:
+        streak = prev.get("streak", 0) if same else 0
+    else:
+        streak = prev.get("streak", 0) + 1 if same else 1
+    store.kv_set("monitor", {
+        "state": state, "streak": streak, "ts": int(time.time()),
+        "uptime_s": p.uptime_s, "guard_running": p.guard_running,
+        "factory_log": p.factory_log, "error": p.error,
+        "source": "manual" if manual else "monitor",
+    })
+    if not same:
+        store.log_event("info", "monitor", "state %s -> %s%s" % (
+            prev.get("state") or "none", state, " (manual check)" if manual else ""))
+        # Grab the evidence NOW, on the first sighting from any source, while
+        # /tmp still holds the crash dump. A reboot clears /tmp and a wipe
+        # clears /data/log, so waiting for confirmation means capturing nothing.
+        if state == STATE_CRASHED:
+            capture_diagnostics("ava crashed (%s saw CRASHED)"
+                                % ("manual check" if manual else "monitor"))
+    return prev, streak
+
+
+def _last_line(text: str) -> str:
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
+
+
 def _attempts_ok(s: Settings) -> bool:
     rec = store.kv_get("restore_attempts", {"n": 0, "t0": 0})
     now = int(time.time())
@@ -857,26 +1068,17 @@ def monitor_tick() -> dict:
     """One monitoring poll. Called on the schedule and from the UI."""
     s = load_settings()
     state, p = classify(s)
+    _prev, streak = record_state(state, p)
 
-    prev = store.kv_get("monitor", {"state": None, "streak": 0})
-    streak = prev.get("streak", 0) + 1 if prev.get("state") == state else 1
-    store.kv_set("monitor", {
-        "state": state, "streak": streak, "ts": int(time.time()),
-        "uptime_s": p.uptime_s, "guard_running": p.guard_running,
-        "factory_log": p.factory_log, "error": p.error,
-    })
-
-    if prev.get("state") != state:
-        store.log_event("info", "monitor",
-                        "state %s -> %s" % (prev.get("state") or "none", state))
-
-    # Detect a NEW factory-reset entry, independent of the binary check. This
-    # is the authoritative signal: the firmware appends a line every time it
-    # wipes /data.
+    # Detect a NEW factory-reset entry, independent of the binary check. The
+    # log lives in /data/log, so every wipe deletes it and the firmware starts
+    # a fresh one: it only ever holds the LATEST entry. Compare the entry, not
+    # the length. A length check caught the Sep 11 wipe only because "Sep 11"
+    # is one character longer than "Sep 1", and would miss a wipe on Sep 12.
     if p.ssh_ok and p.factory_log:
         seen = store.kv_get("factory_log_seen", "")
-        if seen and p.factory_log != seen and len(p.factory_log) > len(seen):
-            newline = p.factory_log[len(seen):].strip()
+        newline = _last_line(p.factory_log)
+        if seen and newline != _last_line(seen):
             store.log_event("error", "wipe",
                             "NEW factory reset detected: %s" % newline)
             if s.notify_on_wipe:
@@ -887,12 +1089,6 @@ def monitor_tick() -> dict:
     if state == STATE_HEALTHY:
         store.kv_set("restore_attempts", {"n": 0, "t0": 0})
         return {"state": state, "streak": streak, "acted": False}
-
-    # Grab the evidence NOW, on the first sighting, while /tmp still holds the
-    # crash dump. A reboot clears /tmp and a wipe clears /data/log, so waiting
-    # for confirmation means capturing nothing.
-    if state == STATE_CRASHED and prev.get("state") != STATE_CRASHED:
-        capture_diagnostics("ava crashed (monitor saw CRASHED)")
 
     if state in (STATE_OFFLINE, STATE_NO_SSH):
         # Never auto-act on an unverified state.
