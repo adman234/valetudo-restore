@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import tarfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -655,6 +656,10 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
         state, after = classify(s)
         record_state(state, after, manual=True)
         steps.append("robot now reports %s" % state)
+        # Restarting ava and Valetudo in place has not always been enough for a
+        # restore to take, so reboot when asked to. Only a restore that got this
+        # far reboots; a failed one never does.
+        rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(s, steps, "restore")
         store.log_event("info", "restore",
                         "restore from %s (%s)" % (chosen["filename"], reason), steps)
         if s.notify_on_restore:
@@ -663,7 +668,8 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                    {"reason": reason, "steps": steps})
         store.kv_set("last_restore", {"ts": int(time.time()),
                                       "file": chosen["filename"], "reason": reason})
-        return {"ok": True, "file": chosen["filename"], "steps": steps, "state": state}
+        return {"ok": True, "file": chosen["filename"], "steps": steps, "state": state,
+                "rebooting": rebooting}
 
     except Exception as e:
         log.exception("restore failed")
@@ -826,6 +832,7 @@ def reboot_robot() -> dict:
                 raise R.RobotUnreachable(p.error or "probe failed")
             c.reboot()
         store.log_event("info", "reboot", "robot reboot requested")
+        _after_reboot(s, "manual reboot")
         return {"ok": True,
                 "note": "Reboot requested. The robot takes roughly 2-4 minutes to "
                         "come back; monitoring will report OFFLINE/NO_SSH until "
@@ -974,14 +981,86 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
 
         state, after = classify(s)
         record_state(state, after, manual=True)
+        rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(
+            s, steps, "map restore")
         store.log_event("info", "restore-map", "map restored", steps)
-        return {"ok": True, "steps": steps, "state": state,
-                "note": "Previous map moved to %s on the robot. Give ava a minute, "
-                        "then check the map in Valetudo." % quarantine}
+        return {"ok": True, "steps": steps, "state": state, "rebooting": rebooting,
+                "note": "Previous map moved to %s on the robot. %s" % (
+                    quarantine,
+                    "The robot is rebooting to apply it; check the map in Valetudo "
+                    "once it is back, in 2-4 minutes." if rebooting else
+                    "Give ava a minute, then check the map in Valetudo.")}
     except Exception as e:
         log.exception("map restore failed")
         store.log_event("error", "restore-map", "map restore FAILED: %s" % e, steps)
         return {"ok": False, "error": str(e), "steps": steps}
+
+
+# --------------------------------------------------------------------------
+# rebooting
+# --------------------------------------------------------------------------
+# A rebooting robot answers SSH before Valetudo is up, so the confirmation waits
+# for HEALTHY (or WIPED) instead of reporting the first answer it gets.
+REBOOT_FIRST_CHECK_S = 90
+REBOOT_POLL_S = 20
+REBOOT_GIVE_UP_S = 600
+
+
+def _spawn(fn, *args) -> None:
+    threading.Thread(target=fn, args=args, daemon=True,
+                     name="vr-" + fn.__name__).start()
+
+
+def _after_reboot(s: Settings, what: str) -> None:
+    """
+    The robot was just told to reboot. Show it as OFFLINE (it is about to be)
+    rather than leaving the pre-reboot verdict on the dashboard, and confirm in
+    the background when it is back.
+    """
+    record_state(STATE_OFFLINE, R.Probe(error="rebooting after the %s" % what),
+                 manual=True)
+    _spawn(_confirm_back_after_reboot, s, what)
+
+
+def _reboot_after_restore(s: Settings, steps: list, what: str) -> bool:
+    """Reboot after a successful restore. Never raises; returns True if requested."""
+    try:
+        with _client(s) as c:
+            c.reboot()
+    except Exception as e:
+        steps.append("reboot after the %s FAILED: %s" % (what, e))
+        store.log_event("error", "reboot", "reboot after the %s FAILED: %s" % (what, e))
+        return False
+    steps.append("rebooting the robot so the %s takes effect (back in 2-4 minutes)" % what)
+    store.log_event("info", "reboot", "rebooting the robot after the %s" % what)
+    _after_reboot(s, what)
+    return True
+
+
+def _confirm_back_after_reboot(s: Settings, what: str,
+                               first_check: int = REBOOT_FIRST_CHECK_S,
+                               poll: int = REBOOT_POLL_S,
+                               give_up: int = REBOOT_GIVE_UP_S) -> str:
+    """Wait for the robot to come back and record how it came back."""
+    time.sleep(first_check)
+    waited = first_check
+    while True:
+        state, p = classify(s)
+        done = state in (STATE_HEALTHY, STATE_WIPED)
+        if done or waited >= give_up:
+            record_state(state, p, manual=True)
+            if state == STATE_HEALTHY:
+                store.log_event("info", "reboot", "robot back %ds after the reboot "
+                                "(%s): HEALTHY" % (waited, what))
+            elif done:
+                store.log_event("error", "reboot", "robot came back %ds after the "
+                                "reboot (%s) %s" % (waited, what, state))
+            else:
+                store.log_event("error", "reboot", "robot still %s %ds after the "
+                                "reboot (%s); monitoring carries on" % (state, waited, what))
+            return state
+        time.sleep(poll)
+        waited += poll
 
 
 def classify(s: Settings) -> tuple[str, R.Probe]:

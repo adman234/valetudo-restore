@@ -369,6 +369,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_AUTO_RESTORE` | `false` | restore automatically on a confirmed wipe |
 | `VR_MAX_RESTORE_ATTEMPTS` | `3` | attempts allowed per window |
 | `VR_RESTORE_WINDOW_HOURS` | `6` | the window for the above |
+| `VR_REBOOT_AFTER_RESTORE` | `true` | reboot the robot after every successful restore, manual or automatic |
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
 | `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
 | `VR_RESTORE_DUSTSTREAMER` | `true` | reinstall duststreamer if the backup has it |
@@ -444,10 +445,28 @@ default is 02:30.
 | 7 | the boot hook, rebuilt from `/misc/_root_postboot.sh.tpl` |
 | 8 | the complete map plus `/data/DivideAI`, with `ava` stopped for the swap and restarted after it (it is restarted even without a map, so the vendor settings take effect) |
 | 9 | Valetudo restarted, then a fresh probe so the dashboard shows the new state |
+| 10 | the robot rebooted, when *Reboot the robot after a restore* is on (the default) |
 
-Steps 3, 5 and 6 can each be switched off in Settings. With no archive chosen, a
+Steps 3, 5, 6 and 10 can each be switched off in Settings. With no archive chosen, a
 restore uses the **newest full backup** and skips any newer ones flagged
 incomplete (see *Incomplete backups*); the result lists what it skipped.
+
+### Rebooting after a restore
+
+Restarting `ava` and Valetudo in place has not always been enough for a
+restore to take, so by default the robot is rebooted once a restore succeeds.
+That covers every kind: manual or automatic, full or map-only, from a stored
+backup or an uploaded one. A failed restore never reboots.
+
+The reboot is preceded by `sync`. The robot is offline for 2-4 minutes, and the
+dashboard shows `OFFLINE` for that time rather than the pre-reboot verdict.
+A background check then waits for the robot and logs how it came back. It
+waits for `HEALTHY` rather than taking the first answer, because a booting
+robot accepts SSH before Valetudo has started, which would otherwise look like
+a crash. The **Reboot robot** button gets the same treatment.
+
+Turn it off with *Reboot the robot after a restore* in Settings, or
+`VR_REBOOT_AFTER_RESTORE=false`.
 
 Some things are captured but never written back automatically:
 
@@ -515,8 +534,9 @@ Safety properties:
 
 * the robot's current map is moved to `/data/_map_replaced-<timestamp>` first,
   so the operation is reversible (the two most recent are kept)
-* `ava` and `miio_client` are stopped for the swap and restarted afterwards, so
-  **no reboot is needed**
+* `ava` and `miio_client` are stopped for the swap and restarted afterwards,
+  and the robot is then rebooted unless *Reboot the robot after a restore* is
+  off
 * `/data/config/miio` and `/mnt/private` are never touched
 
 ### Manual controls
@@ -527,7 +547,7 @@ The dashboard has controls Valetudo's own UI does not offer:
 |---|---|
 | **Test connection** | probes the robot and updates the status card immediately |
 | **Restart Valetudo** | stops and relaunches just the Valetudo process |
-| **Reboot robot** | reboots the whole machine; rarely needed |
+| **Reboot robot** | reboots the whole machine; restores do this for you by default |
 | **map only** (per backup) | restores just the map, see above |
 | **mark as full** (per backup) | overrides an incomplete flag, see *Incomplete backups* |
 

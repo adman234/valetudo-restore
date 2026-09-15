@@ -45,6 +45,11 @@ class Settings(BaseModel):
     auto_restore: bool = False
     max_restore_attempts: int = Field(3, ge=1, le=10)
     restore_window_hours: int = Field(6, ge=1, le=168)
+    # Reboot once a restore (full or map-only, manual or automatic) succeeds.
+    # Restarting ava and Valetudo in place has not always been enough for a
+    # restore to take; after a reboot every process starts against the
+    # restored files.
+    reboot_after_restore: bool = True
     # Reinstall the wifi-keeper + boot hook alongside Valetudo itself.
     # The boot hook is NOT optional in practice: /etc/rc.sysinit:73 is the only
     # thing that starts Valetudo, and it carries VALETUDO_CONFIG_PATH.
@@ -103,6 +108,7 @@ ENV_MAP = {
     "VR_AUTO_RESTORE": "auto_restore",
     "VR_MAX_RESTORE_ATTEMPTS": "max_restore_attempts",
     "VR_RESTORE_WINDOW_HOURS": "restore_window_hours",
+    "VR_REBOOT_AFTER_RESTORE": "reboot_after_restore",
     "VR_RESTORE_WIFI_KEEPER": "restore_wifi_keeper",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",

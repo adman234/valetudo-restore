@@ -59,12 +59,21 @@
     <label class="check"><input type="checkbox" name="auto_restore" {% if s.auto_restore %}checked{% endif %}> Auto-restore when a wipe is detected</label>
     <label>Max attempts <input name="max_restore_attempts" type="number" min="1" max="10" value="{{ s.max_restore_attempts }}"></label>
     <label>Per window (h) <input name="restore_window_hours" type="number" min="1" max="168" value="{{ s.restore_window_hours }}"></label>
+    <label class="check wide"><input type="checkbox" name="reboot_after_restore" {% if s.reboot_after_restore %}checked{% endif %}> Reboot the robot after a restore</label>
   </div>
   <p class="hint danger-hint">
     Auto-restore writes to the robot. It only ever triggers on a
     <em>confirmed</em> state where SSH succeeded and the binary was observed
     missing, never on an unreachable robot. It restores from the newest
     <em>full</em> backup and skips any flagged incomplete.
+  </p>
+  <p class="hint">
+    <strong>Reboot the robot after a restore</strong> applies to every restore
+    that succeeds: manual or automatic, full or map-only, from a stored backup or
+    an uploaded one. Restarting <code>ava</code> and Valetudo in place has not
+    always been enough for a restore to take. The robot is offline for 2-4
+    minutes; the dashboard shows <code>OFFLINE</code> until it is back, and the
+    event log records how it came back. A failed restore never reboots.
   </p>
 
   <h2>What a restore puts back</h2>

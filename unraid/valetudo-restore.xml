@@ -47,6 +47,9 @@
   <Config Name="Auto-restore" Target="VR_AUTO_RESTORE" Default="false"
           Description="Automatically restore when a wipe is CONFIRMED. Off by default - a restore writes to the robot."
           Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Reboot after restore" Target="VR_REBOOT_AFTER_RESTORE" Default="true"
+          Description="Reboot the robot after every successful restore, manual or automatic. Restarting ava and Valetudo in place is not always enough for a restore to take."
+          Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
   <Config Name="Webhook URL" Target="VR_WEBHOOK_URL" Default=""
           Description="Notification webhook (Home Assistant, ntfy, Discord...). Leave empty to disable notifications."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>

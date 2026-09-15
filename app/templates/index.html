@@ -2,6 +2,7 @@
 {% block body %}
 
 {% set st = monitor.get('state') or 'UNKNOWN' %}
+{% set rb = ' The robot reboots afterwards.' if s.reboot_after_restore else '' %}
 <section class="cards">
   {# app.js refreshes this card in place from /api/status; the data-st hooks
      are what it writes to. #}
@@ -73,7 +74,7 @@
       Reboot robot
     </button>
     <button class="danger" data-post="/api/restore" data-out="#out"
-            data-confirm="Restore EVERYTHING from the newest full backup? This overwrites Valetudo, its config and the voice pack. Backups flagged incomplete are skipped.">
+            data-confirm="Restore EVERYTHING from the newest full backup? This overwrites Valetudo, its config and the voice pack. Backups flagged incomplete are skipped.{{ rb }}">
       Restore all data from newest full backup
     </button>
   </div>
@@ -82,8 +83,9 @@
     process, since its own web UI has no restart control. It always relaunches
     with <code>VALETUDO_CONFIG_PATH</code> set, so your settings stay on
     persistent storage. <strong>Reboot robot</strong> restarts the whole
-    machine. That is rarely needed, because restoring a map restarts only what
-    it has to.
+    machine. Restores {% if s.reboot_after_restore %}reboot it for you afterwards{% else %}do not reboot it{% endif %};
+    change that with <em>Reboot the robot after a restore</em> in
+    <a href="/settings">Settings</a>.
   </p>
   <pre id="out" class="out" hidden></pre>
 </section>
@@ -116,14 +118,14 @@
           <a href="/api/backups/{{ b.filename }}">download</a>
           {% if b.full %}
           <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
-                  data-confirm="Restore EVERYTHING from {{ b.filename }}?">restore all</button>
+                  data-confirm="Restore EVERYTHING from {{ b.filename }}?{{ rb }}">restore all</button>
           <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
-                  data-confirm="Restore only the map from {{ b.filename }}?">map only</button>
+                  data-confirm="Restore only the map from {{ b.filename }}?{{ rb }}">map only</button>
           {% else %}
           <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
-                  data-confirm="{{ warn }} Restore EVERYTHING from it anyway?">restore all</button>
+                  data-confirm="{{ warn }} Restore EVERYTHING from it anyway?{{ rb }}">restore all</button>
           <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
-                  data-confirm="{{ warn }} Restore its map anyway?">map only</button>
+                  data-confirm="{{ warn }} Restore its map anyway?{{ rb }}">map only</button>
           {% endif %}
           {% if b.override %}
           <button class="link" data-post="/api/backups/{{ b.filename }}/mark-full" data-field="on=0"
@@ -172,11 +174,11 @@
   <form id="restoreform" enctype="multipart/form-data" class="mapform">
     <input type="file" name="file" accept=".gz,.tgz,.tar.gz" required>
     <button type="submit" class="danger" data-endpoint="/api/restore"
-            data-confirm="Restore EVERYTHING from this archive? Overwrites Valetudo, its config and the voice pack.">
+            data-confirm="Restore EVERYTHING from this archive? Overwrites Valetudo, its config and the voice pack.{{ rb }}">
       Upload &amp; restore everything
     </button>
     <button type="submit" class="danger" data-endpoint="/api/restore-map"
-            data-confirm="Restore only the map from this archive? Your current map is set aside first.">
+            data-confirm="Restore only the map from this archive? Your current map is set aside first.{{ rb }}">
       Upload &amp; restore map only
     </button>
   </form>
@@ -207,7 +209,9 @@
     </p>
     <p>
       <code>ava</code> and <code>miio_client</code> are stopped, the files are
-      swapped, and both restart. <strong>No reboot needed.</strong> Your previous
+      swapped, and both restart.{% if s.reboot_after_restore %} The robot is then
+      rebooted, because restarting them in place has not always been enough
+      for a restore to take.{% endif %} Your previous
       map is moved to <code>/data/_map_replaced-&lt;timestamp&gt;</code> rather
       than deleted. <code>/data/config/miio</code> (wifi and device identity) and
       <code>/mnt/private</code> are never touched.
