@@ -546,6 +546,12 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     c.write_file(R.P_GUARD, guard, mode="0755")
                     steps.append("wifi-keeper restored")
 
+                # 3a. crash-keeper, always the version bundled in this image:
+                # it is what keeps the evidence of the next wipe.
+                if s.restore_crash_keeper:
+                    c.write_file(R.P_CRASH_KEEPER, R.bundled("crash-keeper.sh"), mode="0755")
+                    steps.append("crash-keeper installed")
+
                 # 3b. voice pack - user-installed audio a wipe destroys.
                 # /data/config/ava/language_in_use (restored with the vendor
                 # config) names the pack; without these files the robot would
@@ -604,7 +610,8 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
 
                 # 4. boot hook from the rootfs template
                 try:
-                    c.rebuild_boot_hook(include_keeper=bool(s.restore_wifi_keeper and guard))
+                    c.rebuild_boot_hook(include_keeper=bool(s.restore_wifi_keeper and guard),
+                                        include_crash_keeper=bool(s.restore_crash_keeper))
                     steps.append("boot hook rebuilt from /misc template")
                 except Exception as e:
                     steps.append("boot hook rebuild FAILED: %s" % e)
@@ -649,6 +656,8 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     c.run("kill $(ps | grep -v grep | grep wifi-keeper.sh "
                           "| awk '{print $1}') 2>/dev/null; rm -f /data/wifi-keeper.pid")
                     c.start_guard()
+                if s.restore_crash_keeper:
+                    c.start_script(R.P_CRASH_KEEPER, "/tmp/crash-keeper.pid")
                 steps.append("valetudo started")
 
         # Record a fresh verdict. The dashboard shows the last recorded one,
@@ -698,6 +707,8 @@ DIAG_ITEMS = [
     ("/data/log", "data_log.tar.gz", True),
     ("/data/wifi-keeper.log", "wifi_keeper.log", False),
     ("/data/ava_reboot_cnt", "ava_reboot_cnt", False),
+    # what crash-keeper parked where the wipe cannot reach it
+    (R.P_EVIDENCE, "vr_evidence.tar.gz", True),
 ]
 
 
@@ -771,6 +782,47 @@ def capture_diagnostics(reason: str, force: bool = False) -> dict:
 # --------------------------------------------------------------------------
 # monitoring
 # --------------------------------------------------------------------------
+def install_helpers() -> dict:
+    """
+    Install or update the helper scripts without restoring anything:
+    wifi-keeper and crash-keeper from this image, the boot hook rebuilt so both
+    start at boot, and both (re)started now.
+    """
+    s = load_settings()
+    steps: list[str] = []
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            if not p.binary_present:
+                return {"ok": False, "error": "The robot has been wiped. Use Restore, "
+                                              "which installs these as well."}
+            c.write_file(R.P_GUARD, R.bundled("wifi-keeper.sh"), mode="0755")
+            c.write_file(R.P_CRASH_KEEPER, R.bundled("crash-keeper.sh"), mode="0755")
+            steps.append("wifi-keeper and crash-keeper written")
+            c.rebuild_boot_hook(include_keeper=True, include_crash_keeper=True)
+            steps.append("boot hook rebuilt from the /misc template")
+            c.start_script(R.P_GUARD, "/data/wifi-keeper.pid")
+            c.start_script(R.P_CRASH_KEEPER, "/tmp/crash-keeper.pid")
+            steps.append("both started")
+        store.log_event("info", "helpers", "helper scripts installed", steps)
+        return {"ok": True, "steps": steps}
+    except Exception as e:
+        log.exception("installing helpers failed")
+        store.log_event("error", "helpers", "installing helpers FAILED: %s" % e, steps)
+        return {"ok": False, "error": str(e), "steps": steps}
+
+
+def list_diagnostics() -> list[dict]:
+    if not DIAG_DIR.exists():
+        return []
+    return sorted(
+        ({"filename": p.name, "size": p.stat().st_size, "ts": int(p.stat().st_mtime)}
+         for p in DIAG_DIR.glob("diag-*.tar.gz")),
+        key=lambda x: x["ts"], reverse=True)
+
+
 def restart_valetudo() -> dict:
     """
     Stop and restart the Valetudo process on the robot.
@@ -1163,6 +1215,9 @@ def monitor_tick() -> dict:
             if s.notify_on_wipe:
                 notify(s, "wipe_detected",
                        "Robot factory-reset itself: %s" % newline)
+            # crash-keeper parked the watchdog's evidence in /mnt/misc; pull it
+            # now rather than waiting for someone to ask for it.
+            capture_diagnostics("wipe detected: %s" % newline, force=True)
         store.kv_set("factory_log_seen", p.factory_log)
 
     if state == STATE_HEALTHY:

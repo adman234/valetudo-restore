@@ -143,6 +143,30 @@ if [ -x /data/wifi-keeper.sh ]; then
 fi
 ```
 
+### crash-keeper: evidence that survives the wipe
+
+When `ava` fails a health check, the vendor watchdog tars `ava`'s logs, a
+memory history and a system snapshot into `/data/tmp_log.tar.gz`. The wipe
+then deletes all of `/data`, so the only record of why `ava` failed is
+destroyed by the failure it documents.
+
+`guard/crash-keeper.sh` runs from the boot hook and copies each new tarball,
+with the kernel log at that moment, to `/mnt/misc/vr-evidence`. `/mnt/misc` is
+the one writable place a wipe does not touch. It also writes one line per boot
+(uptime, whether the watchdog mark is armed, `ava`'s memory use, free memory),
+so a boot line showing `mark=yes` means the previous reboot was the watchdog's
+first strike.
+
+`/mnt/misc` is only about 3 MB and also holds calibration data, so the
+evidence is capped at 1 MB, keeps the newest four captures, and is skipped
+rather than written if it would leave less than 1 MB free.
+
+A restore installs it (Settings, *crash-keeper*, on by default), and
+**Install helper scripts** installs or updates it on a robot that needs no
+restore. When a wipe is detected the tool takes a diagnostics capture
+straight away, which includes `/mnt/misc/vr-evidence`. Nightly backups carry it
+too, inside `misc.tar.gz`.
+
 ### The boot hook is not optional
 
 `/data/_root_postboot.sh` is invoked from `/etc/rc.sysinit`:
@@ -371,6 +395,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_RESTORE_WINDOW_HOURS` | `6` | the window for the above |
 | `VR_REBOOT_AFTER_RESTORE` | `true` | reboot the robot after every successful restore, manual or automatic |
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
+| `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
 | `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
 | `VR_RESTORE_DUSTSTREAMER` | `true` | reinstall duststreamer if the backup has it |
 | `VR_DUSTSTREAMER_URL` | *(Hypfer release)* | fallback download when the backup has no copy |
@@ -438,7 +463,7 @@ default is 02:30.
 |---|---|
 | 1 | the Valetudo binary (skipped when its md5 already matches) |
 | 2 | `valetudo_config.json`: every Valetudo setting |
-| 3 | `wifi-keeper.sh` |
+| 3 | `wifi-keeper.sh`, and `crash-keeper.sh` from the image |
 | 4 | the voice pack |
 | 5 | vendor settings from `/data/config/ava`, from a curated list: pet avoidance, obstacle images, carpet, mop, room names |
 | 6 | duststreamer, from the archive or the configured URL |
@@ -669,6 +694,9 @@ hammering a robot that is genuinely broken.
 | GET | `/api/backups` | list archives, each with `full`, `complete`, `reasons` and `override` |
 | GET | `/api/backups/{file}` | download an archive |
 | POST | `/api/backups/{file}/delete` | delete an archive |
+| POST | `/api/install-helpers` | install or update wifi-keeper and crash-keeper without a restore |
+| POST | `/api/capture-diagnostics` | pull crash evidence off the robot now |
+| GET | `/api/diagnostics` | list diagnostics captures |
 | POST | `/api/backups/{file}/mark-full` | override an incomplete flag (`on=1`) or withdraw it (`on=0`) |
 | GET | `/api/events` | event log |
 

@@ -13,6 +13,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ /app/app/
+# scripts the app installs on the robot (wifi-keeper, crash-keeper)
+COPY guard/ /app/guard/
 
 # /config  -> settings.json, state.db, ssh key, cached valetudo binary
 # /backups -> timestamped backup archives

@@ -123,6 +123,7 @@ def index(request: Request):
         "monitor": mon,
         "backups": backups,
         "newest_full": service.newest_full(backups),
+        "diagnostics": service.list_diagnostics(),
         "events": store.recent_events(40),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
@@ -293,13 +294,12 @@ def api_capture_diag():
 
 @app.get("/api/diagnostics")
 def api_list_diag():
-    d = service.DIAG_DIR
-    if not d.exists():
-        return []
-    return sorted(
-        ({"filename": p.name, "size": p.stat().st_size, "ts": int(p.stat().st_mtime)}
-         for p in d.glob("diag-*.tar.gz")),
-        key=lambda x: x["ts"], reverse=True)
+    return service.list_diagnostics()
+
+
+@app.post("/api/install-helpers")
+def api_install_helpers():
+    return service.install_helpers()
 
 
 @app.get("/api/diagnostics/{filename}")

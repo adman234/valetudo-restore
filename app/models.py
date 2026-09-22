@@ -54,6 +54,9 @@ class Settings(BaseModel):
     # The boot hook is NOT optional in practice: /etc/rc.sysinit:73 is the only
     # thing that starts Valetudo, and it carries VALETUDO_CONFIG_PATH.
     restore_wifi_keeper: bool = True
+    # crash-keeper copies the vendor watchdog's crash logs to /mnt/misc, the
+    # one writable place a wipe does not delete.
+    restore_crash_keeper: bool = True
 
     # --- notifications ---
     notify_on_wipe: bool = True
@@ -110,6 +113,7 @@ ENV_MAP = {
     "VR_RESTORE_WINDOW_HOURS": "restore_window_hours",
     "VR_REBOOT_AFTER_RESTORE": "reboot_after_restore",
     "VR_RESTORE_WIFI_KEEPER": "restore_wifi_keeper",
+    "VR_RESTORE_CRASH_KEEPER": "restore_crash_keeper",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",
     "VR_NOTIFY_ON_WIPE": "notify_on_wipe",

@@ -69,6 +69,10 @@
             data-confirm="Restart the Valetudo process on the robot? The web UI and Home Assistant will drop for a few seconds.">
       Restart Valetudo
     </button>
+    <button data-post="/api/install-helpers" data-out="#out"
+            data-confirm="Install or update wifi-keeper and crash-keeper on the robot and rebuild its boot hook? Nothing else is touched.">
+      Install helper scripts
+    </button>
     <button class="danger" data-post="/api/reboot-robot" data-out="#out"
             data-confirm="Reboot the whole robot? It will be offline for 2-4 minutes.">
       Reboot robot
@@ -218,6 +222,37 @@
     </p>
   </details>
   <pre id="restoreout" class="out" hidden></pre>
+</section>
+
+<section class="panel">
+  <h2>Diagnostics</h2>
+  {% if diagnostics %}
+  <table>
+    <thead><tr><th>When</th><th>File</th><th>Size</th></tr></thead>
+    <tbody>
+    {% for d in diagnostics[:10] %}
+      <tr>
+        <td>{{ d.ts|ts }}</td>
+        <td class="mono"><a href="/api/diagnostics/{{ d.filename }}">{{ d.filename }}</a></td>
+        <td>{{ d.size|size }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="dim">No captures yet.</p>
+  {% endif %}
+  <div class="actions">
+    <button data-post="/api/capture-diagnostics" data-out="#diagout">Capture now</button>
+  </div>
+  <p class="hint">
+    A capture pulls <code>/tmp/log</code>, <code>/data/log</code> and whatever
+    <strong>crash-keeper</strong> saved in <code>/mnt/misc/vr-evidence</code>: a
+    copy of the vendor watchdog's crash logs from before the wipe, the kernel log
+    at that moment, and one line per boot. One is taken automatically as soon as
+    a wipe is detected.
+  </p>
+  <pre id="diagout" class="out" hidden></pre>
 </section>
 
 <section class="panel">

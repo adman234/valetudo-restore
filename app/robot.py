@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import logging
+from pathlib import Path
 import socket
 from dataclasses import dataclass
 from typing import Optional
@@ -39,6 +40,16 @@ P_GUARD = "/data/wifi-keeper.sh"
 P_POSTBOOT = "/data/_root_postboot.sh"
 P_POSTBOOT_TPL = "/misc/_root_postboot.sh.tpl"
 P_FACTORY_LOG = "/data/log/factory_reset.log"
+P_CRASH_KEEPER = "/data/crash-keeper.sh"
+P_EVIDENCE = "/mnt/misc/vr-evidence"
+
+# Helper scripts ship inside the image (guard/ at the repo root), so a restore
+# can install the current version even onto a robot whose backup never had it.
+GUARD_DIR = Path(__file__).resolve().parent.parent / "guard"
+
+
+def bundled(name: str) -> bytes:
+    return (GUARD_DIR / name).read_bytes()
 
 # A "map" on these robots is NOT just /data/map. Per pkoehlers/maploader, which
 # supports this exact model (r2491, Mova P10 Pro Ultra), it is:
@@ -366,7 +377,8 @@ class RobotClient:
         return p
 
     # ---------- restore helpers ----------
-    def rebuild_boot_hook(self, include_keeper: bool = True) -> str:
+    def rebuild_boot_hook(self, include_keeper: bool = True,
+                          include_crash_keeper: bool = False) -> str:
         """
         Rebuild /data/_root_postboot.sh from the dustbuilder template.
 
@@ -381,15 +393,18 @@ class RobotClient:
         if not self.path_exists(P_POSTBOOT_TPL):
             raise FileNotFoundError(P_POSTBOOT_TPL + " missing on rootfs")
         self.run("cp %s %s" % (P_POSTBOOT_TPL, P_POSTBOOT))
+        blocks = []
         if include_keeper:
-            block = (
-                "\n# wifi-keeper (valetudo-restore)\n"
-                "if [ -x " + P_GUARD + " ]; then\n"
-                "        " + P_GUARD + " > /dev/null 2>&1 &\n"
-                "fi\n"
-            )
+            blocks.append(("wifi-keeper", P_GUARD))
+        if include_crash_keeper:
+            blocks.append(("crash-keeper", P_CRASH_KEEPER))
+        if blocks:
+            text = "".join(
+                "\n# %s (valetudo-restore)\nif [ -x %s ]; then\n"
+                "        %s > /dev/null 2>&1 &\nfi\n" % (label, path, path)
+                for label, path in blocks)
             cur = self.read_file(P_POSTBOOT)
-            self.write_file(P_POSTBOOT, cur + block.encode(), mode="0755")
+            self.write_file(P_POSTBOOT, cur + text.encode(), mode="0755")
         else:
             self.run("chmod 0755 " + P_POSTBOOT)
         return self.read_file(P_POSTBOOT).decode("utf-8", "replace")
@@ -400,6 +415,16 @@ class RobotClient:
             "VALETUDO_CONFIG_PATH=%s setsid %s >/dev/null 2>&1 </dev/null &"
             % (P_CONFIG, P_VALETUDO)
         )
+
+    def start_script(self, path: str, pidfile: str) -> None:
+        """
+        (Re)start a helper daemon. Any running copy is stopped first, so an
+        older version or a stale pidfile can never leave two running.
+        """
+        name = path.rsplit("/", 1)[-1]
+        self.run("kill $(ps | grep -v grep | grep %s | awk '{print $1}') 2>/dev/null; "
+                 "rm -f %s" % (name, pidfile))
+        self.run("[ -x %s ] && setsid %s >/dev/null 2>&1 </dev/null &" % (path, path))
 
     def start_guard(self) -> None:
         self.run(

@@ -80,7 +80,7 @@
         // Test connection, restores and restart all record a fresh verdict.
         if (d && d.state) { pollStatus(); }
         // Reload so the tables and status cards reflect the new state.
-        if (/backup|restore|delete|binary/.test(url)) {
+        if (/backup|restore|delete|binary|diagnostics|helpers/.test(url)) {
           setTimeout(function () { window.location.reload(); }, 1200);
         }
       })
