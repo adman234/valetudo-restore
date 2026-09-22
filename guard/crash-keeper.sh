@@ -18,6 +18,13 @@
 # evidence is capped and is never allowed to eat into the space the firmware
 # needs.
 #
+# THE CLOCK
+#   The robot's clock reads 1970 until it is set, about 20s after boot. The
+#   most valuable capture (the first strike's, copied at boot before the next
+#   failure overwrites it) is taken in that window, so captures are numbered
+#   and ordered by that number, never by date. The boot line waits for the
+#   clock (or two minutes) so it carries a real date.
+#
 # INSTALL
 #   place at /data/crash-keeper.sh, chmod +x, and add to /data/_root_postboot.sh:
 #     if [ -x /data/crash-keeper.sh ]; then
@@ -61,6 +68,7 @@ mkdir -p "$OUT" || exit 1
 
 kb_used() { du -sk "$OUT" 2>/dev/null | cut -f1; }
 kb_free() { df -k "$FS" 2>/dev/null | awk 'NR==2 {print $4}'; }
+uptime_s() { cut -d. -f1 /proc/uptime; }
 
 state() {
     mark=no
@@ -69,7 +77,7 @@ state() {
     rss=$(awk '/VmRSS/ {print $2}' "/proc/$a/status" 2>/dev/null)
     avail=$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null)
     printf '%s up=%ss mark=%s cnt=%s crashes=%s ava_rss=%skB mem_avail=%skB' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$(cut -d. -f1 /proc/uptime)" "$mark" \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$(uptime_s)" "$mark" \
         "$(cat /data/ava_reboot_cnt 2>/dev/null || echo 0)" \
         "$(cat /tmp/crash_count.log 2>/dev/null || echo 0)" "${rss:-?}" "${avail:-?}"
 }
@@ -79,25 +87,30 @@ note() {
     tail -n 300 "$OUT/boots.log" > "$OUT/boots.tmp" 2>/dev/null && mv "$OUT/boots.tmp" "$OUT/boots.log"
 }
 
+# Captures are named crash-<seq>-..., zero-padded, so name order is capture
+# order even when the clock was wrong. Newest first = reverse name order.
+captures_newest_first() { ls -1 "$OUT"/crash-*.tar.gz 2>/dev/null | sort -r; }
+
 prune() {
     n=0
-    for f in $(ls -1t "$OUT"/crash-*.tar.gz 2>/dev/null); do
+    for f in $(captures_newest_first); do
         n=$((n + 1))
         [ "$n" -gt "$KEEP" ] && rm -f "$f" "$f.dmesg.txt"
     done
     while [ "$(kb_used)" -gt "$BUDGET_KB" ]; do
-        oldest=$(ls -1t "$OUT"/crash-*.tar.gz 2>/dev/null | tail -n 1)
+        oldest=$(captures_newest_first | tail -n 1)
         [ -z "$oldest" ] && break
         rm -f "$oldest" "$oldest.dmesg.txt"
     done
 }
 
-note "boot wipe=\"$(tail -n 1 /data/log/factory_reset.log 2>/dev/null)\""
-
 # The tarball is only ever overwritten, never deleted, so remember what was
 # already kept across reboots instead of copying the same one every boot.
 last=$(cat "$OUT/.last" 2>/dev/null)
+booted=0
 while true; do
+    # Copy first: at boot, the tarball in /data is the first strike's, and the
+    # next failed check overwrites it.
     if [ -f "$SRC" ]; then
         m=$(stat -c %Y "$SRC" 2>/dev/null)
         if [ -n "$m" ] && [ "$m" != "$last" ]; then
@@ -109,7 +122,9 @@ while true; do
             elif [ $((free - size)) -lt "$MIN_FREE_KB" ]; then
                 note "evidence is ${size}KB and would leave $FS under ${MIN_FREE_KB}KB free; not kept"
             else
-                dst="$OUT/crash-$(date +%Y%m%d-%H%M%S)-up$(cut -d. -f1 /proc/uptime).tar.gz"
+                seq=$(( $(cat "$OUT/.seq" 2>/dev/null || echo 0) + 1 ))
+                echo "$seq" > "$OUT/.seq"
+                dst="$OUT/crash-$(printf '%05d' "$seq")-$(date +%Y%m%d-%H%M%S)-up$(uptime_s).tar.gz"
                 cp "$SRC" "$dst"
                 dmesg 2>/dev/null | tail -n 80 > "$dst.dmesg.txt"
                 sync
@@ -119,6 +134,10 @@ while true; do
             last=$m
             echo "$m" > "$OUT/.last"
         fi
+    fi
+    if [ "$booted" = 0 ] && { [ "$(date +%Y)" -ge 2024 ] || [ "$(uptime_s)" -ge 120 ]; }; then
+        note "boot wipe=\"$(tail -n 1 /data/log/factory_reset.log 2>/dev/null)\""
+        booted=1
     fi
     sleep "$INTERVAL"
 done
