@@ -143,6 +143,7 @@ def index(request: Request):
         "monitor": mon,
         "backups": backups,
         "newest_full": service.newest_full(backups),
+        "map_reset": store.kv_get("map_reset") or {},
         "diagnostics": service.list_diagnostics(),
         "events": store.recent_events(40),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
@@ -315,6 +316,11 @@ def api_capture_diag():
 @app.get("/api/diagnostics")
 def api_list_diag():
     return service.list_diagnostics()
+
+
+@app.post("/api/reset-map")
+def api_reset_map(confirm: str = Form(default="")):
+    return service.reset_map(confirm)
 
 
 @app.post("/api/install-helpers")

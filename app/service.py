@@ -257,22 +257,36 @@ def assess_pending() -> int:
                 cache[fn] = None
         return cache[fn]
 
-    baseline_fn = None
+    baseline_fn, baseline_ts = None, 0
+    reset_ts = map_reset_ts()
     n = 0
     for r in reversed(store.list_backups()):
         if r["complete"] is None:
             facts = facts_of(r["filename"])
+            # After a deliberate map reset the new map starts with no named
+            # rooms; comparing it with the old map would flag every backup.
+            base = baseline_fn if not (r["ts"] > reset_ts >= baseline_ts > 0) else None
             if facts is None:
                 reasons = ["archive could not be read"]
             else:
                 reasons = assess_backup(
-                    facts, facts_of(baseline_fn) if baseline_fn else None)
+                    facts, facts_of(base) if base else None)
             store.set_assessment(r["filename"], not reasons, reasons)
             r["full"] = bool(r["override"]) or not reasons
             n += 1
         if r["full"]:
-            baseline_fn = r["filename"]
+            baseline_fn, baseline_ts = r["filename"], r["ts"]
     return n
+
+
+def map_reset_ts() -> int:
+    """When the map was last deliberately reset from this tool (0 = never)."""
+    return int((store.kv_get("map_reset") or {}).get("ts", 0))
+
+
+# Vendor settings that describe the rooms of one particular map. Restoring them
+# onto a different map would put the old room names on the new rooms.
+MAP_BOUND_VENDOR = ("ava_SchedulePositionInfo.conf", "ava_speech_seginfo.conf")
 
 
 def newest_full(rows: Optional[list] = None) -> Optional[dict]:
@@ -450,6 +464,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
     s = load_settings()
     uploaded_tmp = None
     skipped = None
+    skip_map = None
     if blob is not None:
         # Validate before doing anything: a friendly message beats
         # "not a gzip file" from deep inside tarfile.
@@ -482,6 +497,11 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
             chosen = newest_full(rows)
             if chosen:
                 skipped = _skipped_note(rows, chosen)
+                # A restore that picked the backup itself must not quietly
+                # undo a deliberate map reset. One chosen by name still may.
+                if chosen["ts"] < map_reset_ts():
+                    skip_map = datetime.fromtimestamp(
+                        map_reset_ts(), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         if not chosen:
             return {"ok": False, "error": ("backup not found: %s" % filename)
                     if filename else _no_full_backup_msg(rows)}
@@ -577,6 +597,8 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                     try:
                         with tarfile.open(fileobj=io.BytesIO(vendor_cfg)) as vt:
                             for name in R.VENDOR_SETTINGS:
+                                if skip_map and name in MAP_BOUND_VENDOR:
+                                    continue
                                 try:
                                     data = vt.extractfile("./ava/" + name).read()
                                 except Exception:
@@ -623,7 +645,13 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 # avoidance, obstacle images and the rest stayed at their old
                 # values until it restarted. Stopping ava here does double duty:
                 # it is required for the map swap anyway.
-                if map_have and "data_map.tar.gz" in map_have and not map_missing:
+                if skip_map:
+                    steps.append("map and room names NOT restored: this backup predates "
+                                 "the map reset on %s" % skip_map)
+                    c.stop_map_processes()
+                    c.start_map_processes()
+                    steps.append("restarted ava + miio_client (settings now applied)")
+                elif map_have and "data_map.tar.gz" in map_have and not map_missing:
                     c.stop_map_processes()
                     steps.append("stopped ava + miio_client")
                     try:
@@ -823,6 +851,97 @@ def list_diagnostics() -> list[dict]:
         key=lambda x: x["ts"], reverse=True)
 
 
+MAP_RESET_PHRASE = "RESET MAP"
+
+
+def _valetudo_api(s: Settings, c) -> tuple[str, Optional[tuple]]:
+    """
+    Base URL and basic-auth credentials for the robot's own Valetudo API. The
+    credentials are read from the robot's config over SSH and only ever sent
+    back to that same robot.
+    """
+    cfg = json.loads(c.read_file(R.P_CONFIG))
+    ws = cfg.get("webserver") or {}
+    ba = ws.get("basicAuth") or {}
+    auth = (ba.get("username", ""), ba.get("password", "")) if ba.get("enabled") else None
+    return "http://%s:%d" % (s.robot_host, int(ws.get("port") or 80)), auth
+
+
+def _robot_status_and_rooms(h, base: str) -> tuple[Optional[str], int]:
+    attrs = h.get(base + "/api/v2/robot/state/attributes").json()
+    status = next((a.get("value") for a in attrs
+                   if a.get("__class") == "StatusStateAttribute"), None)
+    layers = (h.get(base + "/api/v2/robot/state/map").json() or {}).get("layers") or []
+    return status, sum(1 for l in layers if l.get("type") == "segment")
+
+
+def reset_map(confirm: str) -> dict:
+    """
+    Start the map from scratch, keeping everything else installed.
+
+    Safety, in order; any failure stops before anything is changed:
+      1. the typed confirmation phrase, checked here as well as in the UI
+      2. Valetudo installed and running, robot docked or idle
+      3. a fresh backup that is judged full: the undo ("map only" from it)
+    The reset itself is the firmware's own map-edit reset, sent through
+    Valetudo's MapResetCapability, so ava removes the map itself rather than
+    having files deleted underneath it. Afterwards the map is checked for
+    rooms, and the reset time is recorded so completeness checks and automatic
+    restores treat the new map as the baseline.
+    """
+    s = load_settings()
+    steps: list[str] = []
+    if (confirm or "").strip() != MAP_RESET_PHRASE:
+        return {"ok": False, "error": 'Type "%s" to confirm. Nothing was changed.' % MAP_RESET_PHRASE}
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            if not (p.binary_present and p.valetudo_running):
+                return {"ok": False, "error": "Valetudo must be installed and running to reset "
+                                              "the map. Nothing was changed."}
+            base, auth = _valetudo_api(s, c)
+        with httpx.Client(timeout=20, auth=auth) as h:
+            status, rooms_before = _robot_status_and_rooms(h, base)
+        if status not in ("docked", "idle"):
+            return {"ok": False, "error": "The robot is %s. Dock it first. Nothing was changed."
+                                          % (status or "in an unknown state")}
+        steps.append("robot is %s; the current map has %d room(s)" % (status, rooms_before))
+
+        bk = run_backup(kind="pre-reset")
+        if not bk.get("ok") or not bk.get("full"):
+            return {"ok": False, "steps": steps, "error":
+                    "The safety backup %s, so the map was NOT reset. %s" % (
+                        "failed" if not bk.get("ok") else "was flagged incomplete",
+                        bk.get("error") or "; ".join(bk.get("reasons") or []))}
+        steps.append("safety backup taken: %s" % bk["file"])
+
+        with httpx.Client(timeout=30, auth=auth) as h:
+            r = h.put(base + "/api/v2/robot/capabilities/MapResetCapability",
+                      json={"action": "reset"})
+            if r.status_code != 200:
+                raise IOError("the robot refused the reset (HTTP %d): %s"
+                              % (r.status_code, r.text[:200]))
+        store.kv_set("map_reset", {"ts": int(time.time()), "backup": bk["file"]})
+        steps.append("map reset by the robot's own firmware")
+
+        time.sleep(3)
+        with httpx.Client(timeout=20, auth=auth) as h:
+            status, rooms_after = _robot_status_and_rooms(h, base)
+        steps.append("rooms on the map now: %d" % rooms_after)
+        store.log_event("warn", "map-reset", "map reset; safety backup %s" % bk["file"], steps)
+        notify(s, "map_reset", "The map was reset. Undo: restore 'map only' from %s" % bk["file"],
+               {"steps": steps})
+        return {"ok": True, "steps": steps, "rooms_left": rooms_after,
+                "undo": "To undo, use 'map only' on %s in the Backups table." % bk["file"],
+                "note": "Start a cleanup and the robot will map from scratch."}
+    except Exception as e:
+        log.exception("map reset failed")
+        store.log_event("error", "map-reset", "map reset FAILED: %s" % e, steps)
+        return {"ok": False, "error": str(e), "steps": steps}
+
+
 def restart_valetudo() -> dict:
     """
     Stop and restart the Valetudo process on the robot.
@@ -985,6 +1104,11 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
             chosen = newest_full(rows)
             if not chosen:
                 return {"ok": False, "error": _no_full_backup_msg(rows)}
+            if chosen["ts"] < map_reset_ts():
+                return {"ok": False, "error":
+                        "The newest full backup was taken before you reset the map, so "
+                        "restoring it would bring the old map back. If that is what you "
+                        "want, use 'map only' on that backup's row."}
             filename = chosen["filename"]
             note = _skipped_note(rows, chosen)
             if note:

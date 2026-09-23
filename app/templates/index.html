@@ -3,6 +3,7 @@
 
 {% set st = monitor.get('state') or 'UNKNOWN' %}
 {% set rb = ' The robot reboots afterwards.' if s.reboot_after_restore else '' %}
+{% set reset_ts = map_reset.get('ts', 0) %}
 <section class="cards">
   {# app.js refreshes this card in place from /api/status; the data-st hooks
      are what it writes to. #}
@@ -103,6 +104,7 @@
     {% for b in backups %}
       {% set why = b.reasons|join('; ') %}
       {% set warn = b.filename ~ " is flagged INCOMPLETE (" ~ (why or "not checked yet") ~ "). Restoring it can replace your map and settings with what a wipe left behind." %}
+      {% set old = " This backup was taken BEFORE your map reset, so it brings the OLD map back." if reset_ts and b.ts < reset_ts else "" %}
       <tr class="{% if not b.full %}incomplete{% endif %}{% if loop.index > 5 %} extra{% endif %}"{% if loop.index > 5 %} hidden{% endif %}>
         <td>{{ b.ts|ts }}</td>
         <td class="mono">{{ b.filename }}
@@ -122,9 +124,9 @@
           <a href="/api/backups/{{ b.filename }}">download</a>
           {% if b.full %}
           <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
-                  data-confirm="Restore EVERYTHING from {{ b.filename }}?{{ rb }}">restore all</button>
+                  data-confirm="Restore EVERYTHING from {{ b.filename }}?{{ old }}{{ rb }}">restore all</button>
           <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
-                  data-confirm="Restore only the map from {{ b.filename }}?{{ rb }}">map only</button>
+                  data-confirm="Restore only the map from {{ b.filename }}?{{ old }}{{ rb }}">map only</button>
           {% else %}
           <button class="link" data-post="/api/restore" data-field="filename={{ b.filename }}"
                   data-confirm="{{ warn }} Restore EVERYTHING from it anyway?{{ rb }}">restore all</button>
@@ -156,6 +158,14 @@
     Keeping {{ s.keep_backups }}; older archives are pruned automatically, except
     that the newest full backup is never pruned.
   </p>
+  {% if reset_ts %}
+  <p class="hint">
+    <strong>Map reset on {{ reset_ts|ts }}</strong> (safety backup
+    <code>{{ map_reset.get('backup') }}</code>). Backups from before then hold the
+    old map. Restoring from the newest backup, and auto-restore, restore their
+    settings but never their map or room names.
+  </p>
+  {% endif %}
   <p class="hint">
     <strong>Incomplete</strong> backups were taken while the robot was wiped, or
     are missing its Valetudo config, the map, or its room names. Restoring from
@@ -222,6 +232,38 @@
     </p>
   </details>
   <pre id="restoreout" class="out" hidden></pre>
+</section>
+
+<section class="panel danger-zone">
+  <h2>Start the map from scratch</h2>
+  <p class="hint">
+    Deletes the map so the robot builds a new one on its next cleanup, as if it
+    had been wiped, but keeps everything installed.
+  </p>
+  <table class="kept">
+    <tr><th>Kept</th><td>Valetudo and all its settings, schedules, MQTT, the voice
+      pack, vendor settings (carpet, mop, suction), wifi-keeper and crash-keeper,
+      the boot hook, calibration and device identity</td></tr>
+    <tr><th>Removed</th><td>the map, rooms and room names, no-go and no-mop zones,
+      floor materials, and the sensed carpet</td></tr>
+  </table>
+  <details id="resetbox">
+    <summary>I want to reset the map…</summary>
+    <ol class="hint">
+      <li>The robot must be docked. The reset is refused mid-clean.</li>
+      <li>A fresh backup is taken first. If it fails, nothing is reset.</li>
+      <li>The robot's own firmware deletes the map. To undo, use <em>map only</em>
+        on that backup in the table above.</li>
+    </ol>
+    <label class="check"><input type="checkbox" id="reset-ack"> I understand the
+      rooms, names, zones and floor materials will be deleted</label>
+    <label class="phrase">Type <code>RESET MAP</code> to confirm
+      <input id="reset-phrase" autocomplete="off" spellcheck="false"></label>
+    <div class="actions">
+      <button id="reset-go" class="danger" disabled>Reset the map</button>
+    </div>
+  </details>
+  <pre id="resetout" class="out" hidden></pre>
 </section>
 
 <section class="panel">
