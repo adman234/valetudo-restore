@@ -94,6 +94,26 @@ app = FastAPI(title="valetudo-restore", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
+# Static files were served with no version in the URL and no caching policy,
+# so after an update browsers kept running the old app.js/style.css against
+# the new pages. Two fixes: the URL carries a hash of the file contents, so a
+# changed file is a URL the browser has never cached; and every static
+# response says no-cache, so even the same URL is revalidated (a cheap 304)
+# instead of being reused on a guess.
+import hashlib
+
+templates.env.globals["asset_v"] = hashlib.md5(
+    b"".join((BASE / "static" / f).read_bytes() for f in ("app.js", "style.css"))
+).hexdigest()[:10]
+
+
+@app.middleware("http")
+async def _static_no_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 
 def _fmt_ts(ts: int) -> str:
     if not ts:
