@@ -1,10 +1,17 @@
 {% extends "base.html" %}
 {% block body %}
+{# Save lives up here, sticky, so it is never off-screen. It submits the form
+   below via the form= attribute. It renders enabled so saving still works
+   without JavaScript; app.js greys it out until something actually changes. #}
+<div class="pagebar">
+  <h1>Settings</h1>
+  <button type="submit" form="settingsform" id="savebtn" class="save">Save settings</button>
+</div>
 {% if request.query_params.get('saved') %}
 <div class="banner ok">Settings saved.</div>
 {% endif %}
 
-<form method="post" action="/settings" class="panel">
+<form id="settingsform" method="post" action="/settings" class="panel">
   <!-- Booleans this form actually renders. The POST handler treats a bool as
        "unchecked" only if it is named here, so a field added to the model but
        not to this template can never be silently forced to false. -->
@@ -142,7 +149,6 @@
     <label class="check"><input type="checkbox" name="auto_download_binary" {% if s.auto_download_binary %}checked{% endif %}> Download automatically when needed</label>
   </div>
 
-  <div class="actions"><button type="submit" class="primary">Save settings</button></div>
 </form>
 
 <section class="panel">

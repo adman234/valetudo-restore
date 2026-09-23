@@ -125,3 +125,17 @@ tr.incomplete td { background: color-mix(in srgb, var(--err) 6%, transparent); }
 .reasons { font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
            color: var(--err); margin-top: 3px; word-break: normal; }
 .reasons.dim { color: var(--dim); }
+
+/* Settings: sticky title bar holding the Save button */
+.pagebar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center;
+           justify-content: space-between; gap: 12px; background: var(--bg);
+           padding: 10px 0 12px; margin: -6px 0 14px; border-bottom: 1px solid var(--line); }
+.pagebar h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+button.save { font-weight: 600; background: var(--line); border-color: var(--line); color: var(--dim); }
+button.save[disabled] { opacity: 1; cursor: default; }
+button.save[disabled]:hover { border-color: var(--line); color: var(--dim); }
+button.save.dirty { background: var(--ok); border-color: var(--ok); color: #fff; }
+button.save.dirty:hover { filter: brightness(1.08); color: #fff; }
+
+/* a button showing "working…" keeps its width; clip rather than wrap */
+button.busy { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

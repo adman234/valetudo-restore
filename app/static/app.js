@@ -49,6 +49,23 @@
     });
   }
 
+  // A button that swaps its label for "working…" would change width and shove
+  // every button after it along. Pin the current width for the duration.
+  function busy(btn, text) {
+    btn.dataset.label = btn.textContent;
+    btn.style.width = btn.getBoundingClientRect().width + "px";
+    btn.classList.add("busy");
+    btn.disabled = true;
+    btn.textContent = text;
+  }
+
+  function idle(btn) {
+    btn.disabled = false;
+    if (btn.dataset.label !== undefined) { btn.textContent = btn.dataset.label; }
+    btn.style.width = "";
+    btn.classList.remove("busy");
+  }
+
   document.addEventListener("click", function (ev) {
     var btn = ev.target.closest("button[data-post]");
     if (!btn) { return; }
@@ -69,9 +86,7 @@
       opts.body = body;
     }
 
-    var label = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "working…";
+    busy(btn, "working…");
 
     fetch(url, opts)
       .then(function (r) { return r.json().catch(function () { return { status: r.status }; }); })
@@ -85,10 +100,7 @@
         }
       })
       .catch(function (e) { show(out, "Request failed: " + e); })
-      .finally(function () {
-        btn.disabled = false;
-        btn.textContent = label;
-      });
+      .finally(function () { idle(btn); });
   });
 
   function wireUpload(formId, url, outSel, confirmMsg) {
@@ -98,14 +110,13 @@
       ev.preventDefault();
       if (confirmMsg && !window.confirm(confirmMsg)) { return; }
       var btn = f.querySelector("button[type=submit]");
-      var label = btn ? btn.textContent : "";
-      if (btn) { btn.disabled = true; btn.textContent = "uploading…"; }
+      if (btn) { busy(btn, "uploading…"); }
       fetch(url, { method: "POST", body: new FormData(f) })
         .then(function (r) { return r.json(); })
         .then(function (d) { show(outSel, d); })
         .catch(function (e) { show(outSel, "Upload failed: " + e); })
         .finally(function () {
-          if (btn) { btn.disabled = false; btn.textContent = label; }
+          if (btn) { idle(btn); }
         });
     });
   }
@@ -123,6 +134,35 @@
   }
 
   wireUpload("keyform", "/api/upload-key", "#keyout", null);
+
+  // Settings: the Save button is grey and disabled until a field differs from
+  // what the server rendered, then green. Compared against the elements'
+  // default values rather than a snapshot, so a browser that restores typed
+  // values on back-navigation still shows them as unsaved.
+  var sf = document.getElementById("settingsform");
+  var sb = document.getElementById("savebtn");
+  if (sf && sb) {
+    var changed = function (el) {
+      if (!el.name || el.type === "hidden" || el.type === "file") { return false; }
+      if (el.type === "checkbox" || el.type === "radio") { return el.checked !== el.defaultChecked; }
+      if (el.tagName === "SELECT") {
+        var opts = Array.prototype.slice.call(el.options);
+        var def = opts.filter(function (o) { return o.defaultSelected; })[0] || opts[0];
+        return !!def && !def.selected;
+      }
+      return el.value !== el.defaultValue;
+    };
+    var refresh = function () {
+      var dirty = Array.prototype.some.call(sf.elements, changed);
+      sb.disabled = !dirty;
+      sb.classList.toggle("dirty", dirty);
+      sb.title = dirty ? "You have unsaved changes" : "No changes to save";
+    };
+    sf.addEventListener("input", refresh);
+    sf.addEventListener("change", refresh);
+    window.addEventListener("pageshow", refresh);
+    refresh();
+  }
 
   // The restore form has TWO submit buttons posting to different endpoints
   // (everything vs map-only), so the target comes from the button, not the form.
