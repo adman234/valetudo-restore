@@ -1,7 +1,7 @@
 # Quick start
 
 1. Start the container and open `http://<host>:8095`.
-2. **Settings → Upload SSH key** — the key you use for the robot.
+2. **Settings > Upload SSH key**: the key you use for the robot.
    Stored at `/config/valetudo_key`, mode 0600.
 3. Set the **robot host**, save, then **Test connection** on the dashboard.
    You are looking for `HEALTHY`.
@@ -21,7 +21,7 @@ curl -X POST http://<host>:8095/api/monitor-tick
 ```
 
 You should see `CRASHED`. With `confirm_samples` at its default of 2, the first
-tick reports `awaiting confirmation` and the second acts — that is deliberate.
+tick reports `awaiting confirmation` and the second acts. That is deliberate.
 
 Restart it afterwards if auto-restore is off:
 
