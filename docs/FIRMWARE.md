@@ -204,6 +204,54 @@ Both are captured. `/data/ri` has always been restored as part of the map;
 it leaves the detection layer empty and rooms read as generic until the robot
 re-derives them on a later clean.
 
+## The carpet crash, and stripping sensed carpet
+
+crash-keeper's first captures (2026-09-23) located the crash behind the wipes on
+the MOVA P10 Pro Ultra (firmware 1782). `ava` aborts with `std::bad_alloc` in
+
+```
+RobotCleanSet::CarpetCleanSetDeal -> carpet::GenerateCarpet
+  -> carpet::CarpetProfile -> geometry::internal::AddExclude
+```
+
+while it builds a cleaning plan: after the 03:00 auto-reboot, and when a clean
+starts. The input is the robot's *sensed* carpet, which it accumulates cleaning
+after cleaning. The crashing map had one merged carpet shape spanning five rooms.
+Three crashes in a row trip the watchdog, which is why wipes line up with the
+nightly reboot and with scheduled cleans.
+
+Sensed carpet is stored in more places than its outline file, and `ava` redraws
+the outline from the others at the next map save:
+
+| Store | Carpet encoded as |
+|---|---|
+| `DivideMap/<slot>/carpet_map_large.json` | outlines |
+| `DivideMap/<slot>/carpet_path_large.txt` | per-cell carpet flag |
+| `ri/<slot>.dat2` `extend_msgs` `carpet_map`, `carpet_map_bit` | confidence rasters (NEWMV001_RI_V001, 32x32 tiles) |
+| `DivideMap` image layers (`slam_map`, `state_map`, `collision_map`, `contours_with_obstacle_large`, ...) | reserved grey values, e.g. 20 in the SLAM layers, 99/227/234/235 in `state_map` |
+| `segmented_map_with_obstacle_large.png` | 64 + room number ("carpet in room N") |
+| the same files under `DivideDebug/` | historical copies |
+
+[`tools/strip_carpet.py`](../tools/strip_carpet.py) removes all of it from a
+backup archive, and nothing else. Per-room floor materials, rooms, names, zones
+and the map stay as they are. It finds carpet by *shape*: a layer counts as
+carpet only if one of its values lies at least 80% inside the known carpet and
+covers at least 30% of it. Room labels, the nearest false match, reach about 65%.
+Each store gets the empty form `ava` itself writes. Room layers are restored
+exactly, by undoing the 64 + N overlay and checking the result against the
+carpet-free sibling layer. The output is then re-scanned against the original
+carpet and must come back clean.
+
+```bash
+python tools/strip_carpet.py valetudo-backup-XXXX.tar.gz
+python tools/strip_carpet.py valetudo-backup-XXXX.tar.gz --scan-only
+```
+
+Restore the result with **Upload & restore everything**. Two notes. The Carpet
+Sensor setting does not stop carpet accumulating: with it off, the robot still
+flagged about 1,200 carpet cells in two cleans. And stripping only the outline
+file does not work: `ava` redrew an identical outline at its next map save.
+
 ## Notes from the field
 
 Things that are easy to get wrong on these robots, all handled by this tool:
