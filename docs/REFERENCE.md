@@ -269,32 +269,6 @@ Safety properties:
   off
 * `/data/config/miio` and `/mnt/private` are never touched
 
-## Starting the map from scratch
-
-**Start the map from scratch**, at the bottom of the dashboard, deletes the map so
-the robot builds a new one on its next cleanup. It keeps Valetudo and all its
-settings, the voice pack, the vendor settings, the helper scripts, calibration and
-identity. It removes the map, rooms and room names, zones, floor materials and
-the sensed carpet.
-
-It is deliberately hard to press: you tick a box, type `RESET MAP` (checked by
-the server too), and confirm. Nothing changes unless all of the following pass:
-
-1. Valetudo is installed and running, and the robot is docked or idle.
-2. A fresh backup succeeds and is judged full. That backup is the undo:
-   **map only** on its row.
-3. The robot's own firmware performs the reset (Valetudo's `MapResetCapability`),
-   rather than files being deleted underneath `ava`.
-
-The tool reads Valetudo's web credentials from the robot's own config over SSH
-and sends them only back to that same robot.
-
-After a reset, the new map is the baseline. Backups aren't flagged incomplete for
-having fewer named rooms than the old map. **Restoring from the newest backup and
-auto-restore never bring the old map back:** if the newest full backup predates
-the reset, they restore its settings but not its map or room names. Restoring an
-older backup from its row still works, with a warning in the confirmation.
-
 ## Manual controls
 
 The dashboard has controls Valetudo's own UI does not offer:
@@ -397,7 +371,6 @@ POST; use **Extra headers** for anything needing an auth token.
 | GET | `/api/backups` | list archives, each with `full`, `complete`, `reasons` and `override` |
 | GET | `/api/backups/{file}` | download an archive |
 | POST | `/api/backups/{file}/delete` | delete an archive |
-| POST | `/api/reset-map` | reset the map (form field `confirm=RESET MAP`); takes a safety backup first |
 | POST | `/api/install-helpers` | install or update wifi-keeper and crash-keeper without a restore |
 | POST | `/api/capture-diagnostics` | pull crash evidence off the robot now |
 | GET | `/api/diagnostics` | list diagnostics captures |

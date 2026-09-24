@@ -135,41 +135,6 @@
 
   wireUpload("keyform", "/api/upload-key", "#keyout", null);
 
-  // Map reset: the button stays disabled until the box is ticked AND the
-  // phrase is typed exactly; then a final confirm. The server re-checks the
-  // phrase, so none of this is the only safeguard.
-  var rAck = document.getElementById("reset-ack");
-  var rPhrase = document.getElementById("reset-phrase");
-  var rGo = document.getElementById("reset-go");
-  if (rAck && rPhrase && rGo) {
-    var armed = function () {
-      rGo.disabled = !(rAck.checked && rPhrase.value.trim() === "RESET MAP");
-    };
-    rAck.addEventListener("change", armed);
-    rPhrase.addEventListener("input", armed);
-    armed();
-    rGo.addEventListener("click", function () {
-      if (rGo.disabled) { return; }
-      if (!window.confirm("Last chance: delete the map, rooms, names and zones? " +
-                          "A backup is taken first so it can be undone.")) { return; }
-      var body = new URLSearchParams();
-      body.append("confirm", rPhrase.value.trim());
-      busy(rGo, "resetting…");
-      show("#resetout", "Checking the robot, taking a safety backup, then resetting…");
-      fetch("/api/reset-map", { method: "POST", body: body })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          show("#resetout", d);
-          if (d && d.ok) { setTimeout(function () { window.location.reload(); }, 2500); }
-        })
-        .catch(function (e) { show("#resetout", "Request failed: " + e); })
-        .finally(function () {
-          idle(rGo);
-          rAck.checked = false; rPhrase.value = ""; armed();
-        });
-    });
-  }
-
   // Settings: the Save button is grey and disabled until a field differs from
   // what the server rendered, then green. Compared against the elements'
   // default values rather than a snapshot, so a browser that restores typed
