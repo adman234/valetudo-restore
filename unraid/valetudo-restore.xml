@@ -47,6 +47,9 @@
   <Config Name="Auto-restore" Target="VR_AUTO_RESTORE" Default="false"
           Description="Automatically restore when a wipe is CONFIRMED. Off by default - a restore writes to the robot."
           Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Auto-restore newest only" Target="VR_AUTO_RESTORE_NEWEST_ONLY" Default="true"
+          Description="If the newest backup is flagged incomplete, pause auto-restore and let you choose instead of restoring an older one."
+          Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
   <Config Name="Reboot after restore" Target="VR_REBOOT_AFTER_RESTORE" Default="true"
           Description="Reboot the robot after every successful restore, manual or automatic. Restarting ava and Valetudo in place is not always enough for a restore to take."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>

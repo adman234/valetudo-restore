@@ -138,4 +138,5 @@ button.save.dirty { background: var(--ok); border-color: var(--ok); color: #fff;
 button.save.dirty:hover { filter: brightness(1.08); color: #fff; }
 
 /* a button showing "working…" keeps its width; clip rather than wrap */
-button.busy { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.busy { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+              flex-shrink: 0; }   /* a flex row may not squeeze a pinned button */

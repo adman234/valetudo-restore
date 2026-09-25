@@ -30,7 +30,7 @@
 
   <div class="card">
     <h2>Recovery</h2>
-    <div class="big small">{{ "AUTO" if s.auto_restore else "MANUAL" }}</div>
+    <div class="big small">{{ ("AUTO, PAUSED" if restore_paused.get('filename') else "AUTO") if s.auto_restore else "MANUAL" }}</div>
     <div class="sub">
       {% if s.auto_restore %}
         max {{ s.max_restore_attempts }} per {{ s.restore_window_hours }}h
@@ -44,6 +44,14 @@
   </div>
 </section>
 
+{% if restore_paused.get('filename') %}
+<div class="banner warn">
+  <strong>Auto-restore is paused.</strong> The robot looks wiped, but the newest
+  backup, <code>{{ restore_paused.filename }}</code>, is flagged incomplete
+  ({{ restore_paused.reasons }}). Restore one yourself from the Backups table, or
+  use <em>mark as full</em> on it if the flag is wrong and auto-restore will use it.
+</div>
+{% endif %}
 {% if not key_present %}
 <div class="banner warn">
   <strong>No SSH key at <code>{{ s.ssh_key_path }}</code>.</strong>

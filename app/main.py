@@ -147,6 +147,7 @@ def index(request: Request):
         "events": store.recent_events(40),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
+        "restore_paused": store.kv_get("auto_restore_paused") or {},
         "binary_cached": service.binary_cache_path(s.valetudo_arch).exists(),
         "key_present": Path(s.ssh_key_path).exists(),
     })
@@ -218,6 +219,7 @@ def api_status():
         "monitor": store.kv_get("monitor", {}),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
+        "auto_restore_paused": store.kv_get("auto_restore_paused") or {},
         "backups": len(backups),
         "incomplete_backups": sum(1 for b in backups if not b["full"]),
         "newest_full_backup": {"filename": nf["filename"], "ts": nf["ts"]} if nf else None,

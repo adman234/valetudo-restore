@@ -64,6 +64,7 @@
   <h2>Recovery</h2>
   <div class="grid">
     <label class="check"><input type="checkbox" name="auto_restore" {% if s.auto_restore %}checked{% endif %}> Auto-restore when a wipe is detected</label>
+    <label class="check wide"><input type="checkbox" name="auto_restore_newest_only" {% if s.auto_restore_newest_only %}checked{% endif %}> Only auto-restore from the newest backup; if it looks incomplete, wait for me to choose</label>
     <label>Max attempts <input name="max_restore_attempts" type="number" min="1" max="10" value="{{ s.max_restore_attempts }}"></label>
     <label>Per window (h) <input name="restore_window_hours" type="number" min="1" max="168" value="{{ s.restore_window_hours }}"></label>
     <label class="check wide"><input type="checkbox" name="reboot_after_restore" {% if s.reboot_after_restore %}checked{% endif %}> Reboot the robot after a restore</label>
@@ -73,6 +74,13 @@
     <em>confirmed</em> state where SSH succeeded and the binary was observed
     missing, never on an unreachable robot. It restores from the newest
     <em>full</em> backup and skips any flagged incomplete.
+  </p>
+  <p class="hint">
+    <strong>Only auto-restore from the newest backup</strong> (on by default): if the
+    newest backup is flagged incomplete, for example because it was taken while the
+    robot was already wiped, auto-restore does <em>not</em> fall back to an older
+    backup. It pauses, shows a banner and sends one notification, and you choose.
+    Marking the newest backup as full lets it continue.
   </p>
   <p class="hint">
     <strong>Reboot the robot after a restore</strong> applies to every restore

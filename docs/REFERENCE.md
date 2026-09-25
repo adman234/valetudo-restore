@@ -87,9 +87,18 @@ that could have helped. So each backup is judged when it is taken, and flagged
 
 A flagged backup is shown in red with its reasons, and then:
 
-- **Restore all data from newest full backup**, **map only** from the newest,
-  and **auto-restore** all use the newest *full* backup and skip newer flagged
-  ones. The result lists what was skipped.
+- **Restore all data from newest full backup** and **map only** from the newest
+  use the newest *full* backup and skip newer flagged ones. The result lists what
+  was skipped.
+- **Auto-restore does not guess.** With *Only auto-restore from the newest backup*
+  on (the default), a flagged newest backup pauses auto-restore instead of falling
+  back to an older one. The dashboard shows a banner, one `auto_restore_paused`
+  notification is sent, and you choose: restore a backup yourself, or mark the
+  newest as full to let auto-restore continue. With the setting off, auto-restore
+  uses the newest full backup like the manual button.
+- **Fewer rooms is fine.** Only a backup with *no* named rooms is flagged (the
+  blank map a wipe leaves). A map with fewer rooms than before, after merging
+  rooms or a map reset, is judged full.
 - **Retention never prunes the newest full backup**, even when it falls outside
   the window.
 - You can still restore a flagged backup deliberately from its row. The
@@ -150,6 +159,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_AUTO_RESTORE` | `false` | restore automatically on a confirmed wipe |
 | `VR_MAX_RESTORE_ATTEMPTS` | `3` | attempts allowed per window |
 | `VR_RESTORE_WINDOW_HOURS` | `6` | the window for the above |
+| `VR_AUTO_RESTORE_NEWEST_ONLY` | `true` | if the newest backup is flagged incomplete, pause auto-restore instead of using an older one |
 | `VR_REBOOT_AFTER_RESTORE` | `true` | reboot the robot after every successful restore, manual or automatic |
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
 | `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
@@ -311,6 +321,7 @@ Notifications are sent as a JSON `POST` to the webhook URL:
 | `restored` | a restore completed |
 | `restore_failed` | a restore failed |
 | `backup_failed` | a backup failed |
+| `auto_restore_paused` | the robot is wiped but the newest backup is incomplete, so auto-restore waits for you |
 
 The firmware recreates `factory_reset.log` on every wipe, so it only ever holds
 the latest entry. A new wipe is recognised by that entry changing, not by the

@@ -43,6 +43,9 @@ class Settings(BaseModel):
     # --- recovery ---
     # Off by default: restoring writes to the robot, so it is opt-in.
     auto_restore: bool = False
+    # When the newest backup is flagged incomplete, auto-restore does NOT fall
+    # back to an older one: which backup to trust is then the user's call.
+    auto_restore_newest_only: bool = True
     max_restore_attempts: int = Field(3, ge=1, le=10)
     restore_window_hours: int = Field(6, ge=1, le=168)
     # Reboot once a restore (full or map-only, manual or automatic) succeeds.
@@ -109,6 +112,7 @@ ENV_MAP = {
     "VR_POLL_INTERVAL_MINUTES": "poll_interval_minutes",
     "VR_CONFIRM_SAMPLES": "confirm_samples",
     "VR_AUTO_RESTORE": "auto_restore",
+    "VR_AUTO_RESTORE_NEWEST_ONLY": "auto_restore_newest_only",
     "VR_MAX_RESTORE_ATTEMPTS": "max_restore_attempts",
     "VR_RESTORE_WINDOW_HOURS": "restore_window_hours",
     "VR_REBOOT_AFTER_RESTORE": "reboot_after_restore",

@@ -233,6 +233,9 @@ def assess_backup(facts: dict, baseline: Optional[dict]) -> list[str]:
     missing = [m for m in CRITICAL_MEMBERS if m not in facts["members"]]
     if missing:
         reasons.append("missing %s" % ", ".join(missing))
+    # Only ZERO named rooms counts: that is the blank placeholder map a wipe
+    # leaves. Having fewer rooms than before is normal (rooms merged, a map
+    # reset, a partial re-map) and never flags a backup.
     if baseline and baseline.get("rooms") and not facts.get("rooms"):
         reasons.append("no named rooms (the last full backup had %d), so the map "
                        "is most likely the placeholder a wipe leaves behind"
@@ -675,6 +678,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
             notify(s, "restored",
                    "Valetudo restored from %s" % chosen["filename"],
                    {"reason": reason, "steps": steps})
+        store.kv_set("auto_restore_paused", {})
         store.kv_set("last_restore", {"ts": int(time.time()),
                                       "file": chosen["filename"], "reason": reason})
         return {"ok": True, "file": chosen["filename"], "steps": steps, "state": state,
@@ -1222,6 +1226,8 @@ def monitor_tick() -> dict:
 
     if state == STATE_HEALTHY:
         store.kv_set("restore_attempts", {"n": 0, "t0": 0})
+        if store.kv_get("auto_restore_paused"):
+            store.kv_set("auto_restore_paused", {})
         return {"state": state, "streak": streak, "acted": False}
 
     if state in (STATE_OFFLINE, STATE_NO_SSH):
@@ -1246,6 +1252,27 @@ def monitor_tick() -> dict:
     if not s.auto_restore:
         return {"state": state, "streak": streak, "acted": False,
                 "note": "auto_restore disabled"}
+
+    # Ambiguous data: the robot is wiped but the NEWEST backup is flagged
+    # incomplete. Falling back to an older backup would be a guess about which
+    # one to trust, so leave that to the user: pause, and say so once.
+    if state == STATE_WIPED and s.auto_restore_newest_only:
+        store.reconcile_backups(BACKUP_DIR)
+        assess_pending()
+        rows = store.list_backups()
+        if rows and not rows[0]["full"]:
+            newest = rows[0]
+            why = "; ".join(newest.get("reasons") or []) or "not checked yet"
+            if (store.kv_get("auto_restore_paused") or {}).get("filename") != newest["filename"]:
+                store.kv_set("auto_restore_paused", {"ts": int(time.time()),
+                                                     "filename": newest["filename"], "reasons": why})
+                msg = ("Auto-restore paused: the robot is wiped, but the newest backup %s is "
+                       "flagged incomplete (%s). Choose a backup to restore, or mark it as "
+                       "full." % (newest["filename"], why))
+                store.log_event("warn", "monitor", msg)
+                notify(s, "auto_restore_paused", msg, {"backup": newest["filename"], "reasons": why})
+            return {"state": state, "streak": streak, "acted": False,
+                    "note": "auto-restore paused: newest backup is incomplete"}
 
     if not _attempts_ok(s):
         store.log_event("error", "monitor",
