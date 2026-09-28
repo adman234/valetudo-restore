@@ -42,6 +42,8 @@ P_POSTBOOT_TPL = "/misc/_root_postboot.sh.tpl"
 P_FACTORY_LOG = "/data/log/factory_reset.log"
 P_CRASH_KEEPER = "/data/crash-keeper.sh"
 P_EVIDENCE = "/mnt/misc/vr-evidence"
+# DISARM=1|0: whether crash-keeper clears the watchdog's strike mark
+P_CK_CONF = "/data/crash-keeper.conf"
 
 # Helper scripts ship inside the image (guard/ at the repo root), so a restore
 # can install the current version even onto a robot whose backup never had it.
@@ -158,6 +160,11 @@ class Probe:
     factory_log: str = ""
     uptime_s: int = 0
     valetudo_running: bool = False
+    # crash-keeper's wipe guard: strikes it has disarmed (ever), whether it is
+    # standing down after too many in a row, and its latest strikes.log line
+    wipes_prevented: int = 0
+    guard_standing_down: bool = False
+    last_strike: str = ""
     error: str = ""
 
     @property
@@ -348,8 +355,11 @@ class RobotClient:
             "ps | grep -v grep | grep -q wifi-keeper.sh && echo GUARD=1 || echo GUARD=0; "
             "pidof valetudo >/dev/null && echo VAL=1 || echo VAL=0; "
             "echo UP=$(cut -d. -f1 /proc/uptime); "
+            "echo CKP=$(cat %s/.prevented 2>/dev/null); "
+            "[ -e %s/.gaveup ] && echo CKG=1 || echo CKG=0; "
+            "echo CKL=$(tail -n 1 %s/strikes.log 2>/dev/null); "
             "echo __FRLOG__; cat %s 2>/dev/null"
-        ) % (P_VALETUDO, P_CONFIG, P_FACTORY_LOG)
+        ) % (P_VALETUDO, P_CONFIG, P_EVIDENCE, P_EVIDENCE, P_EVIDENCE, P_FACTORY_LOG)
 
         rc, out, err = self.run(script, timeout=self.timeout + 20)
         p = Probe()
@@ -374,6 +384,15 @@ class RobotClient:
                     p.uptime_s = int(line[3:])
                 except ValueError:
                     pass
+            elif line.startswith("CKP="):
+                try:
+                    p.wipes_prevented = int(line[4:] or 0)
+                except ValueError:
+                    pass
+            elif line.startswith("CKG="):
+                p.guard_standing_down = line.endswith("1")
+            elif line.startswith("CKL="):
+                p.last_strike = line[4:]
         return p
 
     # ---------- restore helpers ----------

@@ -11,8 +11,27 @@
 #
 # This copies every new tarball to /mnt/misc, which the wipe does not touch,
 # together with the kernel log at that moment, and keeps a one-line-per-boot
-# history there as well. A boot line showing mark=yes means the previous
-# reboot was the watchdog's first strike.
+# history there as well.
+#
+# THE WIPE GUARD
+#   The first strike leaves /data/sys_auto_reboot.mark behind, and the second
+#   strike only wipes if that mark is still there. The firmware's own 03:00 job
+#   (check_restart_ava.sh) deletes it every night. This deletes it as soon as it
+#   appears instead, right after keeping the evidence, so a run of crashes can
+#   only ever cause strike 1 (a reboot) and never the wipe.
+#
+#   Loop guard: if crashes keep coming, the robot would reboot over and over.
+#   So the mark is cleared at most MAX_STRIKES times in a row. The next one is
+#   left in place and the firmware wipes as it always did, which is where
+#   valetudo-restore takes over. The count starts again once the robot has
+#   been up for HEALTHY_S (6 hours) since a boot. Counters live in $OUT, which
+#   survives a wipe; uptime is used rather than the clock, which reads 1970
+#   right after boot.
+#
+#   Files in $OUT: strikes.log (one line per strike), .prevented (strikes
+#   cleared, ever), .strikes (in a row), .gaveup (present while standing down).
+#   /data/crash-keeper.conf with DISARM=0 turns the guard off; it is re-read
+#   every pass, so no restart is needed.
 #
 # /mnt/misc is small (about 3 MB) and also holds calibration data, so the
 # evidence is capped and is never allowed to eat into the space the firmware
@@ -46,6 +65,11 @@ BUDGET_KB=${CK_BUDGET_KB:-1024}      # total size of $OUT
 MIN_FREE_KB=${CK_MIN_FREE_KB:-1024}  # never leave $FS with less than this free
 KEEP=${CK_KEEP:-4}                   # newest crash captures kept
 INTERVAL=${CK_INTERVAL:-5}
+MARK=${CK_MARK:-/data/sys_auto_reboot.mark}
+CONF=${CK_CONF:-/data/crash-keeper.conf}
+UPTIME=${CK_UPTIME:-/proc/uptime}
+MAX_STRIKES=${CK_MAX_STRIKES:-3}     # marks cleared in a row before standing down
+HEALTHY_S=${CK_HEALTHY_S:-21600}     # uptime that counts as recovered
 
 # One instance only: the boot hook and a restore can both launch this.
 if [ -f "$PIDFILE" ]; then
@@ -68,11 +92,11 @@ mkdir -p "$OUT" || exit 1
 
 kb_used() { du -sk "$OUT" 2>/dev/null | cut -f1; }
 kb_free() { df -k "$FS" 2>/dev/null | awk 'NR==2 {print $4}'; }
-uptime_s() { cut -d. -f1 /proc/uptime; }
+uptime_s() { cut -d. -f1 "$UPTIME"; }
 
 state() {
     mark=no
-    [ -e /data/sys_auto_reboot.mark ] && mark=yes
+    [ -e "$MARK" ] && mark=yes
     a=$(pidof ava 2>/dev/null | cut -d' ' -f1)
     rss=$(awk '/VmRSS/ {print $2}' "/proc/$a/status" 2>/dev/null)
     avail=$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null)
@@ -102,6 +126,43 @@ prune() {
         [ -z "$oldest" ] && break
         rm -f "$oldest" "$oldest.dmesg.txt"
     done
+}
+
+strike() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') up=$(uptime_s)s $*" >> "$OUT/strikes.log"
+    tail -n 100 "$OUT/strikes.log" > "$OUT/strikes.tmp" 2>/dev/null && mv "$OUT/strikes.tmp" "$OUT/strikes.log"
+    note "$*"
+}
+
+# One mark is one strike: `handled` stops a mark that is deliberately left in
+# place from being counted again on every pass.
+handled=0
+guard() {
+    if [ -f "$OUT/.strikes" ] && [ "$(uptime_s)" -ge "$HEALTHY_S" ]; then
+        rm -f "$OUT/.strikes" "$OUT/.gaveup"
+        strike "up for ${HEALTHY_S}s: the strike count starts again"
+    fi
+    if [ ! -e "$MARK" ]; then
+        handled=0
+        return
+    fi
+    [ "$handled" = 1 ] && return
+    handled=1
+    grep -q '^DISARM=0' "$CONF" 2>/dev/null && { strike "strike 1 happened; wipe guard is off, mark left in place"; return; }
+    n=$(( $(cat "$OUT/.strikes" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > "$OUT/.strikes"
+    if [ "$n" -gt "$MAX_STRIKES" ]; then
+        touch "$OUT/.gaveup"
+        strike "strike $n in a row: over the limit of $MAX_STRIKES, mark LEFT in place; the next crash run lets the firmware wipe"
+        sync
+        return
+    fi
+    rm -f "$MARK"
+    handled=0
+    total=$(( $(cat "$OUT/.prevented" 2>/dev/null || echo 0) + 1 ))
+    echo "$total" > "$OUT/.prevented"
+    sync
+    strike "strike $n in a row: watchdog mark cleared, no wipe armed (prevented $total)"
 }
 
 # The tarball is only ever overwritten, never deleted, so remember what was
@@ -135,6 +196,8 @@ while true; do
             echo "$m" > "$OUT/.last"
         fi
     fi
+    # After the copy: the evidence of the strike is safe before its mark goes.
+    guard
     if [ "$booted" = 0 ] && { [ "$(date +%Y)" -ge 2024 ] || [ "$(uptime_s)" -ge 120 ]; }; then
         note "boot wipe=\"$(tail -n 1 /data/log/factory_reset.log 2>/dev/null)\""
         booted=1

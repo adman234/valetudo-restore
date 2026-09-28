@@ -56,6 +56,9 @@
   <Config Name="Restore crash-keeper" Target="VR_RESTORE_CRASH_KEEPER" Default="true"
           Description="Install crash-keeper on restore. It keeps the vendor watchdog crash logs in /mnt/misc, where a wipe cannot delete them."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Wipe guard" Target="VR_PREVENT_WIPES" Default="true"
+          Description="crash-keeper clears the watchdog first-strike mark, so a run of ava crashes reboots the robot instead of factory-resetting it. At most 3 in a row, then it stands down."
+          Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
   <Config Name="Webhook URL" Target="VR_WEBHOOK_URL" Default=""
           Description="Notification webhook (Home Assistant, ntfy, Discord...). Leave empty to disable notifications."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>

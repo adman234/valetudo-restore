@@ -41,6 +41,8 @@
     {% if last_restore.get('ts') %}
       <div class="sub">last: {{ last_restore.ts|ts }}</div>
     {% endif %}
+    <div class="sub">wipe guard: {% if not s.prevent_wipes %}off{% elif wipe_guard.get('standing_down') %}standing down{% else %}on{% endif %},
+      wipes prevented: {{ wipe_guard.get('prevented', 0) }}</div>
   </div>
 </section>
 
@@ -50,6 +52,15 @@
   backup, <code>{{ restore_paused.filename }}</code>, is flagged incomplete
   ({{ restore_paused.reasons }}). Restore one yourself from the Backups table, or
   use <em>mark as full</em> on it if the flag is wrong and auto-restore will use it.
+</div>
+{% endif %}
+{% if s.prevent_wipes and wipe_guard.get('standing_down') %}
+<div class="banner warn">
+  <strong>The wipe guard is standing down.</strong> The robot crashed and rebooted
+  several times in a row, so crash-keeper stopped disarming the watchdog to avoid
+  an endless reboot loop. The next run of crashes will let the firmware wipe the
+  robot, and auto-restore takes over from there. It re-arms by itself once the
+  robot has been up for 6 hours. Latest: <code>{{ wipe_guard.get('last') }}</code>
 </div>
 {% endif %}
 {% if not key_present %}

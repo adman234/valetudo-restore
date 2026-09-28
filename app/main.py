@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -148,6 +149,7 @@ def index(request: Request):
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
         "restore_paused": store.kv_get("auto_restore_paused") or {},
+        "wipe_guard": store.kv_get("wipe_guard") or {},
         "binary_cached": service.binary_cache_path(s.valetudo_arch).exists(),
         "key_present": Path(s.ssh_key_path).exists(),
     })
@@ -197,8 +199,12 @@ async def settings_save(request: Request):
         s = Settings(**cur)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    guard_changed = s.prevent_wipes != load_settings().prevent_wipes
     save_settings(s)
     store.log_event("info", "settings", "settings updated")
+    if guard_changed:
+        # In the background: an unreachable robot must not stall the save.
+        threading.Thread(target=service.apply_wipe_guard, daemon=True).start()
     reschedule()
     return RedirectResponse("/settings?saved=1", status_code=303)
 
@@ -220,6 +226,7 @@ def api_status():
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
         "last_restore": store.kv_get("last_restore", {}),
         "auto_restore_paused": store.kv_get("auto_restore_paused") or {},
+        "wipe_guard": store.kv_get("wipe_guard") or {},
         "backups": len(backups),
         "incomplete_backups": sum(1 for b in backups if not b["full"]),
         "newest_full_backup": {"filename": nf["filename"], "ts": nf["ts"]} if nf else None,

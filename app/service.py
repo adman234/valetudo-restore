@@ -553,7 +553,9 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 # it is what keeps the evidence of the next wipe.
                 if s.restore_crash_keeper:
                     c.write_file(R.P_CRASH_KEEPER, R.bundled("crash-keeper.sh"), mode="0755")
-                    steps.append("crash-keeper installed")
+                    _write_guard_conf(c, s)
+                    steps.append("crash-keeper installed (wipe guard %s)"
+                                 % ("on" if s.prevent_wipes else "off"))
 
                 # 3b. voice pack - user-installed audio a wipe destroys.
                 # /data/config/ava/language_in_use (restored with the vendor
@@ -804,7 +806,9 @@ def install_helpers() -> dict:
                                               "which installs these as well."}
             c.write_file(R.P_GUARD, R.bundled("wifi-keeper.sh"), mode="0755")
             c.write_file(R.P_CRASH_KEEPER, R.bundled("crash-keeper.sh"), mode="0755")
-            steps.append("wifi-keeper and crash-keeper written")
+            _write_guard_conf(c, s)
+            steps.append("wifi-keeper and crash-keeper written (wipe guard %s)"
+                         % ("on" if s.prevent_wipes else "off"))
             c.rebuild_boot_hook(include_keeper=True, include_crash_keeper=True)
             steps.append("boot hook rebuilt from the /misc template")
             c.start_script(R.P_GUARD, "/data/wifi-keeper.pid")
@@ -816,6 +820,63 @@ def install_helpers() -> dict:
         log.exception("installing helpers failed")
         store.log_event("error", "helpers", "installing helpers FAILED: %s" % e, steps)
         return {"ok": False, "error": str(e), "steps": steps}
+
+
+def _write_guard_conf(c: R.RobotClient, s: Settings) -> None:
+    c.write_file(R.P_CK_CONF, b"DISARM=%d\n" % (1 if s.prevent_wipes else 0), mode="0644")
+
+
+def apply_wipe_guard() -> dict:
+    """
+    Push the wipe-guard setting to the robot now. crash-keeper re-reads its
+    conf on every pass, so no restart is needed. Skipped on a wiped robot: the
+    next restore writes it.
+    """
+    s = load_settings()
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            if not p.binary_present:
+                return {"ok": False, "error": "robot is wiped; the next restore applies it"}
+            _write_guard_conf(c, s)
+        msg = "wipe guard turned %s on the robot" % ("on" if s.prevent_wipes else "off")
+        store.log_event("info", "wipe-guard", msg)
+        return {"ok": True, "message": msg}
+    except Exception as e:
+        store.log_event("warn", "wipe-guard",
+                        "could not update the wipe guard on the robot: %s "
+                        "(Install helpers applies it later)" % e)
+        return {"ok": False, "error": str(e)}
+
+
+def check_wipe_guard(s: Settings, p: R.Probe) -> None:
+    """
+    React to what crash-keeper's wipe guard did since the last poll. A new
+    prevented strike means ava crashed badly enough for the watchdog to reboot
+    the robot and arm a factory reset, and the guard disarmed it: worth a
+    notification and the evidence, even though nothing was lost.
+    """
+    seen = store.kv_get("wipe_guard") or {}
+    prev = seen.get("prevented")
+    n = p.wipes_prevented
+    if prev is not None and n > prev:
+        msg = ("ava crashed repeatedly and the watchdog rebooted the robot with a "
+               "factory reset armed; crash-keeper disarmed it (%d prevented so far). %s"
+               % (n, p.last_strike))
+        store.log_event("warn", "wipe-guard", msg)
+        if s.notify_on_crash:
+            notify(s, "wipe_prevented", msg, {"prevented": n, "last": p.last_strike})
+        capture_diagnostics("wipe prevented: %s" % p.last_strike, force=True)
+    if p.guard_standing_down and not seen.get("standing_down"):
+        msg = ("crash-keeper stood down after repeated crash reboots in a row: the "
+               "next run of crashes will let the firmware wipe the robot. %s" % p.last_strike)
+        store.log_event("error", "wipe-guard", msg)
+        if s.notify_on_wipe:
+            notify(s, "wipe_guard_stood_down", msg, {"last": p.last_strike})
+    store.kv_set("wipe_guard", {"prevented": n, "standing_down": p.guard_standing_down,
+                                "last": p.last_strike, "ts": int(time.time())})
 
 
 def list_diagnostics() -> list[dict]:
@@ -1223,6 +1284,11 @@ def monitor_tick() -> dict:
             # now rather than waiting for someone to ask for it.
             capture_diagnostics("wipe detected: %s" % newline, force=True)
         store.kv_set("factory_log_seen", p.factory_log)
+
+    # A wiped robot has no crash-keeper running, but /mnt/misc survives, so
+    # the counters stay readable either way.
+    if p.ssh_ok:
+        check_wipe_guard(s, p)
 
     if state == STATE_HEALTHY:
         store.kv_set("restore_attempts", {"n": 0, "t0": 0})

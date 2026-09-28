@@ -152,6 +152,41 @@ restore. When a wipe is detected the tool takes a diagnostics capture
 straight away, which includes `/mnt/misc/vr-evidence`. Nightly backups carry it
 too, inside `misc.tar.gz`.
 
+## The wipe guard: a crash run reboots, it never wipes
+
+The watchdog (`/etc/rc.d/monitor.sh`, release mode) counts failed health
+checks in `/data/ava_reboot_cnt`, reset by any check that passes. At three in a
+row it looks for `/data/sys_auto_reboot.mark`:
+
+- absent: it creates the mark and reboots (strike 1);
+- present: it runs `factory_reset.sh monitor_rescue_brick` (strike 2, the wipe).
+
+Nothing but the 03:00 cron job `check_restart_ava.sh` removes the mark, and
+that job reboots the robot straight after. So a wipe needs two runs of three
+crashes between two 03:00 runs.
+
+crash-keeper deletes the mark as soon as it appears, just after copying the
+strike's evidence. That is the same deletion the 03:00 job makes, and nothing on
+the read-only rootfs is touched. A run of crashes can then only ever be strike 1.
+
+To avoid trading a wipe for an endless reboot loop, it clears the mark at most
+three times in a row. The fourth is left in place, so the next run of crashes
+wipes as before and auto-restore takes over; it writes `.gaveup` and the
+dashboard says the guard is standing down. The count starts again once the
+robot has been up for 6 hours. The counters live in `/mnt/misc/vr-evidence`
+(`.prevented`, `.strikes`, `strikes.log`), so they survive a wipe, and they use
+uptime because the clock reads 1970 for the first seconds after boot.
+
+`/data/crash-keeper.conf` holds `DISARM=1` or `DISARM=0` (Settings, *Wipe
+guard*). crash-keeper re-reads it on every pass. The monitor reads the counters
+on every poll and, for each new prevented wipe, logs it, sends
+`wipe_prevented` and captures diagnostics.
+
+Rejected alternatives: the firmware's debug mode (`/data/initialize.sh`) turns
+off the whole ladder, but also starts `telnetd` with a root shell and is
+deleted by `/etc/rc.start` on every boot; bind-mounting over
+`factory_reset.sh` would also block a deliberate reset from the button.
+
 ## The boot hook is not optional
 
 `/data/_root_postboot.sh` is invoked from `/etc/rc.sysinit`:

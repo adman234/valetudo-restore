@@ -95,9 +95,22 @@
   <div class="grid">
     <label class="check"><input type="checkbox" name="restore_wifi_keeper" {% if s.restore_wifi_keeper %}checked{% endif %}> wifi-keeper + boot hook</label>
     <label class="check"><input type="checkbox" name="restore_crash_keeper" {% if s.restore_crash_keeper %}checked{% endif %}> crash-keeper (keeps the watchdog's crash logs where a wipe cannot delete them)</label>
+    <label class="check wide"><input type="checkbox" name="prevent_wipes" {% if s.prevent_wipes %}checked{% endif %}> Wipe guard: crash-keeper stops the watchdog's second strike from wiping the robot</label>
     <label class="check"><input type="checkbox" name="restore_vendor_settings" {% if s.restore_vendor_settings %}checked{% endif %}> Vendor settings (obstacle images, pet avoidance, carpet, mop, room names)</label>
     <label class="check"><input type="checkbox" name="restore_duststreamer" {% if s.restore_duststreamer %}checked{% endif %}> duststreamer (camera streaming)</label>
   </div>
+  <p class="hint">
+    <strong>Wipe guard</strong> (on by default, part of crash-keeper). The robot's
+    watchdog wipes <code>/data</code> on its second strike of crashes in one day, and
+    only if the mark left by the first strike is still there. The firmware's own
+    03:00 job deletes that mark every night; crash-keeper deletes it as soon as it
+    appears, after saving the crash evidence, so crashes only ever reboot the robot.
+    To avoid an endless reboot loop it clears the mark at most 3 times in a row,
+    then stands down and lets the firmware wipe, which auto-restore handles; it
+    re-arms after 6 hours of uptime. Every prevented wipe is logged, sends a
+    <code>wipe_prevented</code> notification and captures the evidence. Changing
+    this applies to the robot right away.
+  </p>
   <p class="hint">
     <strong>Vendor settings</strong> live in <code>/data/config/ava</code> and were
     previously skipped, which is why things like obstacle images and pet

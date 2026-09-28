@@ -60,6 +60,9 @@ class Settings(BaseModel):
     # crash-keeper copies the vendor watchdog's crash logs to /mnt/misc, the
     # one writable place a wipe does not delete.
     restore_crash_keeper: bool = True
+    # The wipe guard in crash-keeper: clear the watchdog's first-strike mark so
+    # a run of crashes reboots the robot instead of arming the factory reset.
+    prevent_wipes: bool = True
 
     # --- notifications ---
     notify_on_wipe: bool = True
@@ -118,6 +121,7 @@ ENV_MAP = {
     "VR_REBOOT_AFTER_RESTORE": "reboot_after_restore",
     "VR_RESTORE_WIFI_KEEPER": "restore_wifi_keeper",
     "VR_RESTORE_CRASH_KEEPER": "restore_crash_keeper",
+    "VR_PREVENT_WIPES": "prevent_wipes",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",
     "VR_NOTIFY_ON_WIPE": "notify_on_wipe",

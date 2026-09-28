@@ -163,6 +163,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_REBOOT_AFTER_RESTORE` | `true` | reboot the robot after every successful restore, manual or automatic |
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
 | `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
+| `VR_PREVENT_WIPES` | `true` | wipe guard: crash-keeper clears the watchdog's first-strike mark so crashes reboot the robot instead of wiping it (at most 3 in a row) |
 | `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
 | `VR_RESTORE_DUSTSTREAMER` | `true` | reinstall duststreamer if the backup has it |
 | `VR_DUSTSTREAMER_URL` | *(Hypfer release)* | fallback download when the backup has no copy |
@@ -322,6 +323,8 @@ Notifications are sent as a JSON `POST` to the webhook URL:
 | `restore_failed` | a restore failed |
 | `backup_failed` | a backup failed |
 | `auto_restore_paused` | the robot is wiped but the newest backup is incomplete, so auto-restore waits for you |
+| `wipe_prevented` | `ava` crashed repeatedly, the watchdog rebooted with a wipe armed, and the wipe guard disarmed it (sent with *notify on crash*) |
+| `wipe_guard_stood_down` | 3 prevented wipes in a row: the guard stopped, so the next crash run wipes (sent with *notify on wipe*) |
 
 The firmware recreates `factory_reset.log` on every wipe, so it only ever holds
 the latest entry. A new wipe is recognised by that entry changing, not by the
