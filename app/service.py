@@ -15,6 +15,7 @@ overwriting a perfectly healthy robot.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -59,6 +60,101 @@ def _stamp() -> str:
 
 def binary_cache_path(arch: str) -> Path:
     return CONFIG_DIR / ("valetudo-" + arch)
+
+
+# Every Valetudo build a backup has seen, one file per build, named by its md5.
+# A backup records which build the robot ran (manifest "valetudo_build") and a
+# restore puts exactly that build back, nightly or release. Kept here rather
+# than inside each archive: it is 37 MB and changes only when Valetudo updates.
+BUILD_DIR = CONFIG_DIR / "valetudo-builds"
+
+
+def build_path(md5: str) -> Path:
+    return BUILD_DIR / (md5 + ".bin")
+
+
+def _config_version(cfg: Optional[bytes]) -> str:
+    """Valetudo stamps its version into its config as _version."""
+    try:
+        return str(json.loads(cfg.decode("utf-8", "replace")).get("_version") or "")
+    except Exception:
+        return ""
+
+
+def build_label(build: Optional[dict]) -> str:
+    if not build or not build.get("md5"):
+        return ""
+    return ("Valetudo %s #%s" % (build.get("version") or "?", build["md5"][:8]))
+
+
+def capture_build(c: R.RobotClient, cfg: Optional[bytes]) -> dict:
+    """
+    Record which Valetudo build the robot runs, and copy it off the robot the
+    first time that build is seen. Never raises: a backup must not fail over
+    this, and a restore without it falls back to the release.
+    """
+    info: dict = {"version": _config_version(cfg)}
+    try:
+        md5 = c.md5(R.P_VALETUDO)
+        if not md5:
+            info["status"] = "absent"
+            return info
+        info["md5"] = md5
+        dest = build_path(md5)
+        if dest.exists():
+            info["status"] = "stored"
+            return info
+        blob = c.read_file(R.P_VALETUDO, timeout=900)
+        if hashlib.md5(blob).hexdigest() != md5:
+            info.update(status="error", error="the binary changed while it was copied")
+            return info
+        BUILD_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".part")
+        tmp.write_bytes(blob)
+        tmp.replace(dest)
+        info["status"] = "stored"
+        store.log_event("info", "binary", "stored %s from the robot (%d bytes)"
+                        % (build_label(info), len(blob)))
+    except Exception as e:
+        log.warning("capturing the Valetudo build failed: %s", e)
+        info.update(status="error", error=str(e))
+    return info
+
+
+def _manifest_of(path: Path) -> Optional[dict]:
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            return json.loads(tar.extractfile("manifest.json").read())
+    except Exception:
+        return None
+
+
+def prune_builds() -> int:
+    """
+    Delete stored builds no kept backup refers to. If any kept backup's
+    manifest cannot be read, delete nothing: it might be the one that needs it.
+    """
+    if not BUILD_DIR.exists():
+        return 0
+    wanted = set()
+    for row in store.list_backups():
+        m = _manifest_of(BACKUP_DIR / row["filename"])
+        if m is None:
+            return 0
+        md5 = (m.get("valetudo_build") or {}).get("md5")
+        if md5:
+            wanted.add(md5)
+    n = 0
+    for p in BUILD_DIR.glob("*.bin"):
+        if p.stem not in wanted:
+            try:
+                p.unlink()
+                n += 1
+            except OSError as e:
+                log.warning("could not delete %s: %s", p, e)
+    if n:
+        store.log_event("info", "binary", "removed %d Valetudo build(s) no backup uses" % n)
+    return n
 
 
 # --------------------------------------------------------------------------
@@ -303,9 +399,10 @@ def run_backup(kind: str = "scheduled") -> dict:
     """
     Pull the robot's irreplaceable state into a single .tar.gz.
 
-    The Valetudo binary is deliberately NOT included: it is a 37 MB file that
-    is always re-downloadable from GitHub, whereas the per-robot identity and
-    calibration data under /mnt/private cannot be regenerated at all.
+    The 37 MB Valetudo binary is not inside the archive. The manifest records
+    which build the robot ran, and that build is kept once in BUILD_DIR, so a
+    restore puts back exactly that build (a nightly included) without every
+    archive carrying its own copy.
     """
     s = load_settings()
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -337,6 +434,7 @@ def run_backup(kind: str = "scheduled") -> dict:
             if s.backup_voice_pack:
                 items.append(R.OPTIONAL_ITEMS["voice_pack"])
 
+            cfg_bytes = None
             tmp = path.with_suffix(".part")
             with tarfile.open(tmp, "w:gz") as tar:
                 for remote, member, is_dir in items:
@@ -357,6 +455,8 @@ def run_backup(kind: str = "scheduled") -> dict:
                                     {"path": remote, "status": "absent"})
                                 continue
                             data = c.read_file(remote)
+                        if member == "valetudo_config.json":
+                            cfg_bytes = data
                         info = tarfile.TarInfo(member)
                         info.size = len(data)
                         info.mtime = int(time.time())
@@ -369,6 +469,8 @@ def run_backup(kind: str = "scheduled") -> dict:
                         manifest["items"].append(
                             {"path": remote, "status": "error", "error": str(e)})
 
+                if probe.binary_present:
+                    manifest["valetudo_build"] = capture_build(c, cfg_bytes)
                 mdata = json.dumps(manifest, indent=2).encode()
                 mi = tarfile.TarInfo("manifest.json")
                 mi.size = len(mdata)
@@ -378,7 +480,9 @@ def run_backup(kind: str = "scheduled") -> dict:
 
         size = path.stat().st_size
         captured = sum(1 for i in manifest["items"] if i["status"] == "ok")
-        store.add_backup(name, size, kind, True, "%d items" % captured)
+        label = build_label(manifest.get("valetudo_build"))
+        store.add_backup(name, size, kind, True,
+                         "%d items" % captured + (", " + label if label else ""))
         assess_pending()
         row = next((b for b in store.list_backups() if b["filename"] == name), {})
         if row.get("full"):
@@ -435,6 +539,7 @@ def prune_backups(s: Settings) -> int:
             log.warning("could not delete %s: %s", p, e)
     if n:
         store.log_event("info", "backup", "pruned %d old backup(s)" % n)
+    prune_builds()
     return n
 
 
@@ -496,11 +601,6 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
     if skipped:
         steps.append(skipped)
     try:
-        binpath = ensure_binary(s)
-        blob = binpath.read_bytes()
-        import hashlib
-        want = hashlib.md5(blob).hexdigest()
-
         with tarfile.open(archive, "r:gz") as tar:
             def member(name: str) -> Optional[bytes]:
                 try:
@@ -515,6 +615,23 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
             dust = member("duststreamer")
             vendor_cfg = member("data_config.tar.gz")
             map_have, map_vendor, map_missing = _read_map_members(tar)
+            try:
+                build = json.loads(tar.extractfile("manifest.json").read()).get(
+                    "valetudo_build") or {}
+            except Exception:
+                build = {}
+
+            # The build this backup was taken with, if it is stored here.
+            # Otherwise the release is the fallback, unless the robot already
+            # runs the backup's build (checked below, once connected).
+            build_md5 = build.get("md5") or ""
+            blob = None
+            if build_md5 and build_path(build_md5).exists():
+                blob = build_path(build_md5).read_bytes()
+                if hashlib.md5(blob).hexdigest() != build_md5:
+                    blob = None
+                    store.log_event("warn", "binary", "stored %s is damaged; not used"
+                                    % build_label(build))
 
             with _client(s) as c:
                 probe = c.probe()
@@ -526,6 +643,18 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 # intact binary, and the upload is the single most failure-prone
                 # step over this robot's wifi.
                 existing = c.md5(R.P_VALETUDO) if c.path_exists(R.P_VALETUDO) else ""
+                if blob is not None:
+                    steps.append("Valetudo build from the backup: %s" % build_label(build))
+                elif build_md5 and existing == build_md5:
+                    blob = b""
+                    steps.append("Valetudo build from the backup: %s (already on the robot)"
+                                 % build_label(build))
+                else:
+                    blob = ensure_binary(s).read_bytes()
+                    steps.append("the backup's Valetudo build is not stored here "
+                                 "(%s); installing the latest release instead"
+                                 % (build_label(build) or "backup predates build tracking"))
+                want = build_md5 if (blob == b"") else hashlib.md5(blob).hexdigest()
                 if existing == want:
                     steps.append("binary already correct (md5 match) - upload skipped")
                 else:

@@ -39,10 +39,20 @@ Voice-pack *installation* in Valetudo takes a URL and a hash. Those are not
 persisted anywhere on the robot (only the extracted audio is), which is why
 capturing the files matters if you no longer have the link.
 
-The 37 MB Valetudo binary is deliberately **not** in the archive, since it is always
-re-downloadable from GitHub. It is cached separately in `/config` so restores
-work with no internet. `/mnt/private` is the part that genuinely cannot be
-regenerated.
+**The Valetudo build.** The 37 MB binary is not inside the archive. Instead the
+manifest records which build the robot ran (`valetudo_build`: md5 and version),
+and the first backup to see a build copies it into `/config/valetudo-builds/`,
+one file per build. A restore puts back exactly the build its backup recorded,
+nightly builds included, so a restore never quietly swaps your Valetudo for
+another version. Builds that no kept backup refers to are deleted when old
+backups are pruned. The backups table shows the build next to each backup, for
+example `Valetudo 2026.08.0 #0318b3fc` (a nightly carries the version of the
+last release, so the md5 is what tells builds apart).
+
+If the backup's build is not stored (a backup from before this, or an uploaded
+archive from another install), the restore installs the latest release, which
+is cached in `/config` so restores work with no internet, and says so in its
+steps. `/mnt/private` is the part that genuinely cannot be regenerated.
 
 ## Monitor states
 
@@ -211,7 +221,7 @@ services:
 
 | Step | What |
 |---|---|
-| 1 | the Valetudo binary (skipped when its md5 already matches) |
+| 1 | the Valetudo build the backup was taken with (the latest release if that build is not stored); skipped when the robot already runs it |
 | 2 | `valetudo_config.json`: every Valetudo setting |
 | 3 | `wifi-keeper.sh`, and `crash-keeper.sh` from the image |
 | 4 | the voice pack |
