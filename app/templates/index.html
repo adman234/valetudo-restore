@@ -43,6 +43,8 @@
     {% endif %}
     <div class="sub">wipe guard: {% if not s.prevent_wipes %}off{% elif wipe_guard.get('standing_down') %}standing down{% else %}on{% endif %},
       wipes prevented: {{ wipe_guard.get('prevented', 0) }}</div>
+    <div class="sub">carpet strip: {% if s.auto_strip_carpet %}nightly at {{ s.auto_strip_time }}{% if strip_pending %}, waiting for the robot{% endif %}{% else %}manual only{% endif %}{% if last_strip.get('ts') %},
+      last {{ last_strip.ts|ts }}: {{ "ok" if last_strip.ok else "failed" }}{% endif %}</div>
   </div>
 </section>
 
@@ -88,6 +90,8 @@
             data-confirm="Restart the Valetudo process on the robot? The web UI and Home Assistant will drop for a few seconds.">
       Restart Valetudo
     </button>
+    <button data-post="/api/strip-carpet" data-out="#out"
+            data-confirm="Remove the carpet the robot detected from its map? Room materials stay. A backup is taken first, then the robot's map is swapped{% if s.reboot_after_restore %} and the robot reboots{% endif %}. It only runs if the robot is idle on its dock.">Strip detected carpet</button>
     <button data-post="/api/install-helpers" data-out="#out"
             data-confirm="Install or update wifi-keeper and crash-keeper on the robot and rebuild its boot hook? Nothing else is touched.">
       Install helper scripts

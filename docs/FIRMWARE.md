@@ -267,7 +267,8 @@ the outline from the others at the next map save:
 | `segmented_map_with_obstacle_large.png` | 64 + room number ("carpet in room N") |
 | the same files under `DivideDebug/` | historical copies |
 
-[`tools/strip_carpet.py`](../tools/strip_carpet.py) removes all of it from a
+[`app/strip_carpet.py`](../app/strip_carpet.py) (command line:
+[`tools/strip_carpet.py`](../tools/strip_carpet.py)) removes all of it from a
 backup archive, and nothing else. Per-room floor materials, rooms, names, zones
 and the map stay as they are. It finds carpet by *shape*: a layer counts as
 carpet only if one of its values lies at least 80% inside the known carpet and
@@ -282,10 +283,31 @@ python tools/strip_carpet.py valetudo-backup-XXXX.tar.gz
 python tools/strip_carpet.py valetudo-backup-XXXX.tar.gz --scan-only
 ```
 
-Restore the result with **Upload & restore everything**. Two notes. The Carpet
-Sensor setting does not stop carpet accumulating: with it off, the robot still
-flagged about 1,200 carpet cells in two cleans. And stripping only the outline
-file does not work: `ava` redrew an identical outline at its next map save.
+Restore the result with **Upload & restore map only**, or let the app do the
+whole thing: the dashboard's **Strip detected carpet** button, and the optional
+**Nightly carpet strip** (Settings, off by default), back the robot up, strip
+that backup, verify it and put it back as a map-only restore.
+
+What the strip is for. The Carpet Sensor and Carpet Mode settings do not stop
+carpet accumulating: with both off the robot re-detected a whole rug (7,760
+cells) in one full clean. A stripped map survived reboots and stayed empty until
+the next clean drove over the rug. In the week that was measured there were no
+crashes while the map held no detected carpet, and they returned (a single
+crash, then the two three-crash runs that end in a wipe, right after the
+firmware's nightly reboot) about a day and a half after part of the rug was back.
+So the nightly strip aims at the dangerous moment: it leaves the map without
+detected carpet before the 03:00-05:00 reboot. It cannot help a clean that
+re-detects the rug and crashes on its own way back to the dock.
+
+It only runs when the firmware's own idle test passes (the same
+`status_idle` query `check_restart_ava.sh` makes before rebooting) and Valetudo
+reports `docked`. Stripping only the outline file does not work: `ava` redraws
+an identical outline at its next map save, which is why every store is cleared.
+
+A second crash signature belongs to the same incidents: `LLVM ERROR: out of
+memory` from `libufwriter.so` (the GPU shader compiler) about 23 seconds after
+`ava` starts, with roughly 235 MB resident and most of the RAM free, the same
+moment and the same footprint as the `std::bad_alloc` in `AddExclude`.
 
 ## Notes from the field
 

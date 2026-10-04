@@ -54,6 +54,28 @@ archive from another install), the restore installs the latest release, which
 is cached in `/config` so restores work with no internet, and says so in its
 steps. `/mnt/private` is the part that genuinely cannot be regenerated.
 
+## Carpet strip
+
+**Strip detected carpet** (dashboard) and the **Nightly carpet strip** (Settings,
+off by default) remove the carpet the robot detected from its map and leave
+everything else alone, including the floor material you set for each room.
+
+1. The robot must be idle on its dock: the firmware's own idle test and
+   Valetudo's `docked` status both have to agree. Otherwise nothing is touched.
+   The nightly run then retries on each monitor poll for 90 minutes.
+2. If the map holds no detected carpet, nothing happens: no backup, no restart.
+3. A backup is taken (kind `pre-strip`). Only the newest pre-strip backup is
+   kept; it is the way back if a stripped map ever looks wrong.
+4. That backup is stripped, the result is re-scanned and must hold no carpet, and
+   it is stored as a backup of its own (kind `stripped`), so the newest backup
+   always matches what is on the robot.
+5. It is applied the way **map only** restores are: `ava` stopped, the map
+   folders swapped, `ava` restarted, then a reboot if *Reboot the robot after a
+   restore* is on.
+
+The robot detects rugs again on the next clean that crosses them; no setting
+turns that off. See [FIRMWARE.md](FIRMWARE.md) for why the strip exists.
+
 ## Monitor states
 
 | State | Meaning | Action |
@@ -173,6 +195,8 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_REBOOT_AFTER_RESTORE` | `true` | reboot the robot after every successful restore, manual or automatic |
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
 | `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
+| `VR_AUTO_STRIP_CARPET` | `false` | nightly carpet strip: remove the detected carpet from the robot's map once a night (room materials stay) |
+| `VR_AUTO_STRIP_TIME` | `02:00` | when, `HH:MM` in the container's timezone; pick a time before the robot's own 03:00-05:00 UTC reboot |
 | `VR_PREVENT_WIPES` | `true` | wipe guard: crash-keeper clears the watchdog's first-strike mark so crashes reboot the robot instead of wiping it (at most 3 in a row) |
 | `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
 | `VR_RESTORE_DUSTSTREAMER` | `true` | reinstall duststreamer if the backup has it |
@@ -334,6 +358,7 @@ Notifications are sent as a JSON `POST` to the webhook URL:
 | `backup_failed` | a backup failed |
 | `auto_restore_paused` | the robot is wiped but the newest backup is incomplete, so auto-restore waits for you |
 | `wipe_prevented` | `ava` crashed repeatedly, the watchdog rebooted with a wipe armed, and the wipe guard disarmed it (sent with *notify on crash*) |
+| `carpet_strip_failed` | a manual or nightly carpet strip failed (sent with *notify on backup failure*); a robot that is merely busy is retried, not reported |
 | `wipe_guard_stood_down` | 3 prevented wipes in a row: the guard stopped, so the next crash run wipes (sent with *notify on wipe*) |
 
 The firmware recreates `factory_reset.log` on every wipe, so it only ever holds
@@ -396,6 +421,7 @@ POST; use **Extra headers** for anything needing an auth token.
 | GET | `/api/backups/{file}` | download an archive |
 | POST | `/api/backups/{file}/delete` | delete an archive |
 | POST | `/api/install-helpers` | install or update wifi-keeper and crash-keeper without a restore |
+| POST | `/api/strip-carpet` | strip the detected carpet from the robot's map now (idle on the dock only; backs up first) |
 | POST | `/api/capture-diagnostics` | pull crash evidence off the robot now |
 | GET | `/api/diagnostics` | list diagnostics captures |
 | POST | `/api/backups/{file}/mark-full` | override an incomplete flag (`on=1`) or withdraw it (`on=0`) |

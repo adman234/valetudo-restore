@@ -30,6 +30,7 @@ from typing import Optional
 import httpx
 
 from . import robot as R
+from . import strip_carpet as carpet
 from .models import BACKUP_DIR, CONFIG_DIR, Settings, load_settings
 from . import store
 
@@ -1243,6 +1244,163 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
 
 
 # --------------------------------------------------------------------------
+# carpet strip
+# --------------------------------------------------------------------------
+# How long a nightly strip keeps retrying (on each monitor poll) when the
+# robot is busy or unreachable at the scheduled time.
+AUTO_STRIP_RETRY_S = 90 * 60
+
+
+def strip_carpet(reason: str = "manual") -> dict:
+    """
+    Remove the carpet the robot DETECTED from its map. Per-room floor
+    materials, rooms, zones and everything else stay as they are.
+
+    Only when the robot is idle on its dock, and only when there is carpet to
+    remove. A backup is taken first; the stripped copy of it is verified, kept
+    as a backup of its own, and put on the robot as a map-only restore. One
+    pre-strip backup is kept as the way back.
+    """
+    s = load_settings()
+    steps: list[str] = []
+
+    def done(ok: bool, **kw) -> dict:
+        res = {"ok": ok, "steps": steps, **kw}
+        store.kv_set("last_strip", {"ts": int(time.time()), "ok": ok, "reason": reason,
+                                    "note": kw.get("note") or kw.get("error") or ""})
+        return res
+
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            if not p.binary_present:
+                return done(False, error="the robot is wiped; nothing to strip")
+            state = c.task_state()
+            if not state["idle"] or state["status"] != "docked":
+                why = ("the robot is not idle on its dock (status: %s, firmware says %s)"
+                       % (state["status"] or "unknown", "idle" if state["idle"] else "busy"))
+                return done(False, busy=True, error=why + "; the map was not touched")
+            found = c.carpet_summary()
+        steps.append("robot is idle on its dock")
+        if not found["outlines"] and not found["cells"]:
+            note = "no detected carpet on the map; nothing to do"
+            steps.append(note)
+            if reason == "manual":
+                store.log_event("info", "carpet", note)
+            return done(True, stripped=False, note=note)
+        steps.append("detected carpet: %d outline(s), %d cell(s)"
+                     % (found["outlines"], found["cells"]))
+
+        bk = run_backup(kind="pre-strip")
+        if not bk.get("ok"):
+            raise IOError("the backup before the strip failed: %s" % bk.get("error"))
+        if not bk.get("full"):
+            raise IOError("the backup before the strip is flagged incomplete (%s)"
+                          % "; ".join(bk.get("reasons") or ["unknown"]))
+        src = BACKUP_DIR / bk["file"]
+        steps.append("backup taken first: %s" % bk["file"])
+
+        name = "valetudo-backup-%s.tar.gz" % _stamp()
+        while (BACKUP_DIR / name).exists():
+            time.sleep(1)
+            name = "valetudo-backup-%s.tar.gz" % _stamp()
+        out = BACKUP_DIR / name
+        tmp = out.with_suffix(".part")
+        try:
+            log_lines, n_found, ref = carpet.process(str(src), str(tmp))
+            if not n_found:
+                note = "nothing to strip in the backup"
+                steps.append(note)
+                return done(True, stripped=False, note=note)
+            _, left, _ = carpet.process(str(tmp), None, scan_only=True, ref_override=ref)
+            if left:
+                raise IOError("the stripped copy still contains carpet (%d place(s)); "
+                              "not applied" % left)
+            tmp.replace(out)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+        steps.append("carpet removed from %d place(s); the copy was re-scanned clean"
+                     % n_found)
+        store.add_backup(name, out.stat().st_size, "stripped", True,
+                         "carpet stripped from %s" % bk["file"])
+        assess_pending()
+
+        res = restore_map(filename=name)
+        steps.extend(res.get("steps") or [])
+        if not res.get("ok"):
+            # Never leave a backup in the pool that was not actually applied.
+            out.unlink(missing_ok=True)
+            store.forget_backup(name)
+            raise IOError("putting the stripped map on the robot failed: %s"
+                          % res.get("error"))
+
+        # One pre-strip backup is the way back; older ones are just churn.
+        for row in store.list_backups():
+            if row["kind"] == "pre-strip" and row["filename"] != bk["file"]:
+                (BACKUP_DIR / row["filename"]).unlink(missing_ok=True)
+                store.forget_backup(row["filename"])
+        note = ("removed %d outline(s) and %d carpet cell(s) (%s)"
+                % (found["outlines"], found["cells"], reason))
+        store.log_event("info", "carpet", "detected carpet stripped: " + note, steps)
+        return done(True, stripped=True, note=note, backup=bk["file"], stripped_backup=name,
+                    rebooting=res.get("rebooting"))
+    except R.RobotUnreachable as e:
+        # Before anything was touched. The nightly run retries this, and says
+        # so once itself; only a manual attempt reports it here.
+        if reason == "manual":
+            store.log_event("warn", "carpet", "carpet strip: cannot reach the robot (%s)" % e)
+        return done(False, error=str(e), unreachable=True)
+    except Exception as e:
+        log.exception("carpet strip failed")
+        store.log_event("error", "carpet", "carpet strip FAILED: %s" % e, steps)
+        if s.notify_on_backup_failure:
+            notify(s, "carpet_strip_failed", "Carpet strip failed: %s" % e)
+        return done(False, error=str(e))
+
+
+def auto_strip_tick(scheduled: bool = False) -> dict:
+    """
+    The nightly strip. Called at the configured time (scheduled=True) and then
+    from each monitor poll while a run is pending, so a robot that is cleaning
+    or briefly offline at that minute is retried instead of skipped.
+    """
+    s = load_settings()
+    pending = store.kv_get("auto_strip_pending") or {}
+    if not s.auto_strip_carpet:
+        if pending:
+            store.kv_set("auto_strip_pending", {})
+        return {"ok": True, "note": "nightly carpet strip is off"}
+    now = int(time.time())
+    if scheduled:
+        pending = {"until": now + AUTO_STRIP_RETRY_S, "waiting": ""}
+        store.kv_set("auto_strip_pending", pending)
+    if not pending:
+        return {"ok": True, "note": "no strip pending"}
+    if now > pending.get("until", 0):
+        store.kv_set("auto_strip_pending", {})
+        store.log_event("warn", "carpet",
+                        "nightly carpet strip gave up: %s for %d minutes"
+                        % (pending.get("waiting") or "the robot was not ready",
+                           AUTO_STRIP_RETRY_S // 60))
+        return {"ok": False, "error": "gave up"}
+    res = strip_carpet(reason="nightly")
+    if res.get("busy") or res.get("unreachable"):
+        why = res.get("error") or "the robot was not ready"
+        if not pending.get("waiting"):
+            store.log_event("info", "carpet",
+                            "nightly carpet strip is waiting: %s. Retrying on each "
+                            "monitor poll." % why)
+        pending["waiting"] = "the robot was busy or unreachable"
+        store.kv_set("auto_strip_pending", pending)
+        return res
+    store.kv_set("auto_strip_pending", {})
+    return res
+
+
+# --------------------------------------------------------------------------
 # rebooting
 # --------------------------------------------------------------------------
 # A rebooting robot answers SSH before Valetudo is up, so the confirmation waits
@@ -1418,6 +1576,10 @@ def monitor_tick() -> dict:
     # the counters stay readable either way.
     if p.ssh_ok:
         check_wipe_guard(s, p)
+
+    # A nightly carpet strip that found the robot busy is retried here.
+    if state == STATE_HEALTHY and store.kv_get("auto_strip_pending"):
+        auto_strip_tick()
 
     if state == STATE_HEALTHY:
         store.kv_set("restore_attempts", {"n": 0, "t0": 0})

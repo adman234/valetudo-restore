@@ -64,6 +64,14 @@ class Settings(BaseModel):
     # a run of crashes reboots the robot instead of arming the factory reset.
     prevent_wipes: bool = True
 
+    # --- nightly carpet strip ---
+    # Remove the carpet the robot detected from its map once a night, before
+    # the firmware's own 03:00-05:00 reboot. ava can crash while it turns that
+    # carpet into a cleaning plan, and repeated crashes at boot are what the
+    # watchdog answers with a wipe. Off by default: it rewrites the map.
+    auto_strip_carpet: bool = False
+    auto_strip_time: str = Field("02:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
     # --- notifications ---
     notify_on_wipe: bool = True
     notify_on_crash: bool = True
@@ -122,6 +130,8 @@ ENV_MAP = {
     "VR_RESTORE_WIFI_KEEPER": "restore_wifi_keeper",
     "VR_RESTORE_CRASH_KEEPER": "restore_crash_keeper",
     "VR_PREVENT_WIPES": "prevent_wipes",
+    "VR_AUTO_STRIP_CARPET": "auto_strip_carpet",
+    "VR_AUTO_STRIP_TIME": "auto_strip_time",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",
     "VR_NOTIFY_ON_WIPE": "notify_on_wipe",

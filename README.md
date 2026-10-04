@@ -40,6 +40,8 @@ restore. The full investigation is in [docs/FIRMWARE.md](docs/FIRMWARE.md).
 - **Notifications** by webhook to Home Assistant, ntfy, Discord and similar.
 - **Helper scripts** installed on the robot: `wifi-keeper` keeps Wi-Fi power saving off,
   and `crash-keeper` saves the watchdog's crash logs somewhere a wipe cannot delete them.
+- **Carpet strip**, on demand or nightly (off by default): removes the carpet the robot
+  detected from its map, the data its firmware crashes on, and keeps your room materials.
 - **Wipe guard** (in `crash-keeper`, on by default): a run of `ava` crashes reboots the
   robot instead of letting the vendor watchdog factory-reset it.
 

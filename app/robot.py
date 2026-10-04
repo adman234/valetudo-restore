@@ -395,6 +395,70 @@ class RobotClient:
                 p.last_strike = line[4:]
         return p
 
+    def task_state(self) -> dict:
+        """
+        Whether the robot is free to have its map swapped.
+
+        `idle` is the firmware's own test, the one its nightly reboot job
+        (check_restart_ava.sh) asks before it reboots. `status` is Valetudo's
+        robot status ("docked", "cleaning", ...). The Valetudo login is read
+        from the robot's own config ON the robot and used against localhost
+        only, so it never leaves the robot. An unreadable status comes back as
+        "", which callers must treat as "not confirmed docked".
+        """
+        script = (
+            "echo __VR_OK__; "
+            "echo IDLE=$(avacmd msg_cvt '{\"type\":\"msgCvt\", \"cmd\":\"status_idle\", "
+            "\"rpt_task_state\":true}' 2>/dev/null); "
+            "C=%s; "
+            "U=$(tr -d '\\n' < $C | sed -n 's/.*\"basicAuth\"[^}]*\"username\": *\"\\([^\"]*\\)\".*/\\1/p'); "
+            "P=$(tr -d '\\n' < $C | sed -n 's/.*\"basicAuth\"[^}]*\"password\": *\"\\([^\"]*\\)\".*/\\1/p'); "
+            "echo STATUS=$(curl -s -m 8 -u \"$U:$P\" http://127.0.0.1/api/v2/robot/state/attributes "
+            "| tr '{' '\\n' | grep -A1 '\"StatusStateAttribute' | tail -n 1 "
+            "| sed -n 's/.*\"value\":\"\\([a-z_]*\\)\".*/\\1/p')"
+        ) % _q(P_CONFIG)
+        rc, out, err = self.run(script, timeout=self.timeout + 20)
+        if "__VR_OK__" not in out:
+            raise RobotUnreachable((err or out or "no sentinel in response").strip()[:400])
+        state = {"idle": False, "status": ""}
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("IDLE="):
+                state["idle"] = '"ok"' in line
+            elif line.startswith("STATUS="):
+                state["status"] = line[7:]
+        return state
+
+    def carpet_summary(self) -> dict:
+        """
+        Detected carpet in the robot's current map: outlines in
+        carpet_map_large.json and flagged cells in carpet_path_large.txt,
+        summed over /data/DivideMap. Cheap, so it can decide whether a strip
+        is worth a backup and a map swap at all.
+        """
+        script = (
+            "echo __VR_OK__; for d in /data/DivideMap/*/; do "
+            "[ -f \"$d/carpet_map_large.json\" ] && "
+            "echo O=$(grep -c '\"id\"' \"$d/carpet_map_large.json\"); "
+            "[ -f \"$d/carpet_path_large.txt\" ] && "
+            "echo C=$(awk 'NR>1 && $3!=0' \"$d/carpet_path_large.txt\" | wc -l); "
+            "done"
+        )
+        rc, out, err = self.run(script, timeout=self.timeout + 20)
+        if "__VR_OK__" not in out:
+            raise RobotUnreachable((err or out or "no sentinel in response").strip()[:400])
+        found = {"outlines": 0, "cells": 0}
+        for line in out.splitlines():
+            line = line.strip()
+            try:
+                if line.startswith("O="):
+                    found["outlines"] += int(line[2:] or 0)
+                elif line.startswith("C="):
+                    found["cells"] += int(line[2:] or 0)
+            except ValueError:
+                pass
+        return found
+
     # ---------- restore helpers ----------
     def rebuild_boot_hook(self, include_keeper: bool = True,
                           include_crash_keeper: bool = False) -> str:

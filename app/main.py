@@ -35,7 +35,7 @@ scheduler = BackgroundScheduler(timezone=os.environ.get("TZ", "UTC"))
 def reschedule() -> None:
     """(Re)install jobs from current settings. Safe to call repeatedly."""
     s = load_settings()
-    for job_id in ("backup", "monitor"):
+    for job_id in ("backup", "monitor", "autostrip"):
         try:
             scheduler.remove_job(job_id)
         except Exception:
@@ -54,9 +54,17 @@ def reschedule() -> None:
             id="monitor", max_instances=1, coalesce=True,
             misfire_grace_time=300,
         )
-    log.info("scheduler: backup=%s@%s monitor=%s/%dmin",
+    if s.auto_strip_carpet:
+        hh, mm = s.auto_strip_time.split(":")
+        scheduler.add_job(
+            service.auto_strip_tick, CronTrigger(hour=int(hh), minute=int(mm)),
+            id="autostrip", kwargs={"scheduled": True},
+            max_instances=1, coalesce=True, misfire_grace_time=3600,
+        )
+    log.info("scheduler: backup=%s@%s monitor=%s/%dmin carpet-strip=%s@%s",
              s.backup_enabled, s.cron_summary(),
-             s.monitor_enabled, s.poll_interval_minutes)
+             s.monitor_enabled, s.poll_interval_minutes,
+             s.auto_strip_carpet, s.auto_strip_time)
 
 
 @asynccontextmanager
@@ -150,6 +158,8 @@ def index(request: Request):
         "last_restore": store.kv_get("last_restore", {}),
         "restore_paused": store.kv_get("auto_restore_paused") or {},
         "wipe_guard": store.kv_get("wipe_guard") or {},
+        "last_strip": store.kv_get("last_strip") or {},
+        "strip_pending": bool(store.kv_get("auto_strip_pending")),
         "binary_cached": service.binary_cache_path(s.valetudo_arch).exists(),
         "key_present": Path(s.ssh_key_path).exists(),
     })
@@ -166,6 +176,8 @@ def settings_page(request: Request):
     return templates.TemplateResponse("settings.html", {
         "request": request, "s": cur, "version": __version__,
         "form_bools": ",".join(owned),
+        "now_hm": datetime.now(scheduler.timezone).strftime("%H:%M"),
+        "tz_name": str(scheduler.timezone),
     })
 
 
@@ -227,6 +239,9 @@ def api_status():
         "last_restore": store.kv_get("last_restore", {}),
         "auto_restore_paused": store.kv_get("auto_restore_paused") or {},
         "wipe_guard": store.kv_get("wipe_guard") or {},
+        "auto_strip_carpet": s.auto_strip_carpet,
+        "auto_strip_time": s.auto_strip_time,
+        "last_strip": store.kv_get("last_strip") or {},
         "backups": len(backups),
         "incomplete_backups": sum(1 for b in backups if not b["full"]),
         "newest_full_backup": {"filename": nf["filename"], "ts": nf["ts"]} if nf else None,
@@ -314,6 +329,11 @@ def api_restart_valetudo():
 @app.post("/api/reboot-robot")
 def api_reboot_robot():
     return service.reboot_robot()
+
+
+@app.post("/api/strip-carpet")
+def api_strip_carpet():
+    return service.strip_carpet(reason="manual")
 
 
 @app.post("/api/capture-diagnostics")

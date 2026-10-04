@@ -59,6 +59,12 @@
   <Config Name="Wipe guard" Target="VR_PREVENT_WIPES" Default="true"
           Description="crash-keeper clears the watchdog first-strike mark, so a run of ava crashes reboots the robot instead of factory-resetting it. At most 3 in a row, then it stands down."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Nightly carpet strip" Target="VR_AUTO_STRIP_CARPET" Default="false"
+          Description="Remove the carpet the robot detected from its map once a night (room materials stay). Runs only when the robot is idle on its dock; backs up first."
+          Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Carpet strip time" Target="VR_AUTO_STRIP_TIME" Default="02:00"
+          Description="HH:MM in the container timezone. Pick a time before the robot firmware reboots itself (03:00 to 05:00 UTC)."
+          Type="Variable" Display="advanced" Required="false" Mask="false">02:00</Config>
   <Config Name="Webhook URL" Target="VR_WEBHOOK_URL" Default=""
           Description="Notification webhook (Home Assistant, ntfy, Discord...). Leave empty to disable notifications."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>

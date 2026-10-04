@@ -49,6 +49,31 @@
     on Dreame firmware), so a wipe during that reboot is captured with fresh data.
   </p>
 
+  <h2>Nightly carpet strip</h2>
+  <div class="grid">
+    <label class="check wide"><input type="checkbox" name="auto_strip_carpet" {% if s.auto_strip_carpet %}checked{% endif %}> Strip the detected carpet from the map every night</label>
+    <label>At <input name="auto_strip_time" type="time" value="{{ s.auto_strip_time }}" required></label>
+  </div>
+  <p class="hint">
+    Off by default. The robot draws every rug it drives over into its map, and its
+    main program can crash while turning that carpet into a cleaning plan. Repeated
+    crashes at boot are what the firmware answers with a factory reset. This removes
+    the <em>detected</em> carpet once a night so the robot starts each day, and its
+    own nightly reboot, with none. Your per-room floor materials, rooms and zones
+    are not touched. The robot detects the rugs again on the next clean.
+  </p>
+  <p class="hint">
+    <strong>Pick a time before the robot's own nightly reboot</strong>, which Dreame
+    firmware does between 03:00 and 05:00 UTC. The time here is in the container's
+    timezone ({{ tz_name }}, now {{ now_hm }}). It only runs when the robot is
+    <strong>idle on its dock</strong>; if it is cleaning or offline at that time, it
+    retries on each monitor poll for 90 minutes, then gives up until the next night.
+    Nothing happens when there is no detected carpet. Otherwise a backup is taken
+    first, the stripped copy is verified and kept as a backup too, and the map is
+    swapped the same way a map-only restore does it{% if s.reboot_after_restore %}, followed by a reboot{% endif %}.
+    The dashboard's <em>Strip detected carpet</em> button does the same thing on demand.
+  </p>
+
   <h2>Monitoring</h2>
   <div class="grid">
     <label class="check"><input type="checkbox" name="monitor_enabled" {% if s.monitor_enabled %}checked{% endif %}> Monitoring enabled</label>
