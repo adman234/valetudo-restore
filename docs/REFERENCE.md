@@ -73,6 +73,16 @@ everything else alone, including the floor material you set for each room.
    folders swapped, `ava` restarted, then a reboot if *Reboot the robot after a
    restore* is on.
 
+**Settings the firmware resets.** Two settings have been seen to change around
+a restore: the cleaning mode goes back to *vacuum and mop* after a map swap and
+reboot, and Carpet Mode comes back on after a wipe (its master copy is in
+`/data/zt_conmon_file/robot_state.json`, which a wipe resets and no restored
+file overrides). So every restore notes what the robot should have (a map-only
+restore or a carpet strip: what it has right now; a full restore: what the
+backup's `clean_parameter.json` records) and, once the robot is back, puts them
+right through Valetudo's own controls and logs it. The Valetudo login is read on
+the robot and used against localhost only.
+
 The robot detects rugs again on the next clean that crosses them; no setting
 turns that off. See [FIRMWARE.md](FIRMWARE.md) for why the strip exists.
 
@@ -254,6 +264,7 @@ services:
 | 7 | the boot hook, rebuilt from `/misc/_root_postboot.sh.tpl` |
 | 8 | the complete map plus `/data/DivideAI`, with `ava` stopped for the swap and restarted after it (it is restarted even without a map, so the vendor settings take effect) |
 | 9 | Valetudo restarted, then a fresh probe so the dashboard shows the new state |
+| 10 | once the robot is back: the cleaning mode and Carpet Mode are checked and, if the firmware changed them, set back through Valetudo |
 | 10 | the robot rebooted, when *Reboot the robot after a restore* is on (the default) |
 
 Steps 3, 5, 6 and 10 can each be switched off in Settings. With no archive chosen, a

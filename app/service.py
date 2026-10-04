@@ -803,7 +803,14 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
         # Restarting ava and Valetudo in place has not always been enough for a
         # restore to take, so reboot when asked to. Only a restore that got this
         # far reboots; a failed one never does.
-        rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(s, steps, "restore")
+        # The cleaning mode and Carpet Mode the backed-up robot had. A wipe
+        # resets Carpet Mode's master copy, which no restored file overrides,
+        # so both are checked once the robot is back and set through Valetudo.
+        modes = _modes_from_backup(vendor_cfg) if s.restore_vendor_settings else {}
+        rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(
+            s, steps, "restore", modes)
+        if not rebooting:
+            _spawn(_reapply_modes, s, modes, "restore")
         store.log_event("info", "restore",
                         "restore from %s (%s)" % (chosen["filename"], reason), steps)
         if s.notify_on_restore:
@@ -1218,6 +1225,12 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
             probe = c.probe()
             if not probe.ssh_ok:
                 raise R.RobotUnreachable(probe.error or "probe failed")
+            # A map-only restore must not change settings, but the firmware has
+            # reset the cleaning mode during one. Note them now, restore after.
+            try:
+                keep = c.user_modes()
+            except Exception:
+                keep = {}
             c.stop_map_processes()
             steps.append("stopped ava + miio_client")
             try:
@@ -1229,7 +1242,9 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
         state, after = classify(s)
         record_state(state, after, manual=True)
         rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(
-            s, steps, "map restore")
+            s, steps, "map restore", keep)
+        if not rebooting:
+            _spawn(_reapply_modes, s, keep, "map restore")
         store.log_event("info", "restore-map", "map restored", steps)
         return {"ok": True, "steps": steps, "state": state, "rebooting": rebooting,
                 "note": "Previous map moved to %s on the robot. %s" % (
@@ -1415,7 +1430,91 @@ def _spawn(fn, *args) -> None:
                      name="vr-" + fn.__name__).start()
 
 
-def _after_reboot(s: Settings, what: str) -> None:
+# The firmware has been seen to reset two settings around a restore: the
+# cleaning mode goes back to "vacuum and mop" after a map swap and reboot, and
+# Carpet Mode comes back on after a wipe (its master copy lives in
+# /data/zt_conmon_file/robot_state.json, which a wipe resets). Rather than
+# chase each cause, note what the robot should have and, once it is back, put
+# it right through Valetudo's own controls.
+MODE_NAMES = {"operation_mode": "cleaning mode", "carpet_mode": "Carpet Mode"}
+MODES_WAIT_S = 180
+MODES_POLL_S = 15
+# MopSwitch in clean_parameter.json, as observed on this robot.
+MOPSWITCH_MODES = {5122: "vacuum", 5120: "vacuum_and_mop"}
+
+
+def _modes_from_backup(vendor_cfg: Optional[bytes]) -> dict:
+    """What the backed-up robot had, read from its clean_parameter.json."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(vendor_cfg)) as vt:
+            cp = json.loads(vt.extractfile("./ava/clean_parameter.json").read())
+    except Exception:
+        return {}
+    want = {}
+    if cp.get("MopSwitch") in MOPSWITCH_MODES:
+        want["operation_mode"] = MOPSWITCH_MODES[cp["MopSwitch"]]
+    if cp.get("CleanCarPetPress") in (0, 1):
+        want["carpet_mode"] = bool(cp["CleanCarPetPress"])
+    return want
+
+
+def _fmt_mode(key: str, value) -> str:
+    if key == "carpet_mode":
+        return "%s %s" % (MODE_NAMES[key], "on" if value else "off")
+    return "%s %s" % (MODE_NAMES[key], str(value).replace("_", " "))
+
+
+def _reapply_modes(s: Settings, want: Optional[dict], what: str,
+                   wait: int = MODES_WAIT_S, poll: int = MODES_POLL_S) -> dict:
+    """
+    Once the robot is back after a restore, set the cleaning mode and Carpet
+    Mode back to `want` if the firmware changed them. Never raises.
+    """
+    want = {k: v for k, v in (want or {}).items() if v is not None and k in MODE_NAMES}
+    if not want:
+        return {}
+    waited = 0
+    try:
+        while True:
+            with _client(s) as c:
+                have = c.user_modes()
+                if all(have.get(k) is not None for k in want):
+                    wrong = {k: v for k, v in want.items() if have[k] != v}
+                    if not wrong:
+                        return {}
+                    c.set_user_modes(**wrong)
+                    time.sleep(2)
+                    after = c.user_modes()
+                    fixed = {k: v for k, v in wrong.items() if after.get(k) == v}
+                    failed = {k: v for k, v in wrong.items() if after.get(k) != v}
+                    if fixed:
+                        store.log_event(
+                            "info", "settings",
+                            "the firmware changed settings during the %s; put back: %s"
+                            % (what, ", ".join(_fmt_mode(k, v) for k, v in fixed.items())))
+                    if failed:
+                        store.log_event(
+                            "warn", "settings",
+                            "after the %s these settings are not what they were and could "
+                            "not be put back: %s" % (what, ", ".join(
+                                "%s (now %s)" % (_fmt_mode(k, v), _fmt_mode(k, after.get(k)))
+                                for k, v in failed.items())))
+                    return fixed
+            if waited >= wait:
+                store.log_event("warn", "settings",
+                                "could not check the cleaning mode after the %s: Valetudo "
+                                "did not report it within %ds" % (what, wait))
+                return {}
+            time.sleep(poll)
+            waited += poll
+    except Exception as e:
+        log.warning("re-applying modes after the %s failed: %s", what, e)
+        store.log_event("warn", "settings",
+                        "could not check the cleaning mode after the %s: %s" % (what, e))
+        return {}
+
+
+def _after_reboot(s: Settings, what: str, modes: Optional[dict] = None) -> None:
     """
     The robot was just told to reboot. Show it as OFFLINE (it is about to be)
     rather than leaving the pre-reboot verdict on the dashboard, and confirm in
@@ -1423,10 +1522,12 @@ def _after_reboot(s: Settings, what: str) -> None:
     """
     record_state(STATE_OFFLINE, R.Probe(error="rebooting after the %s" % what),
                  manual=True)
-    _spawn(_confirm_back_after_reboot, s, what)
+    _spawn(_confirm_back_after_reboot, s, what, REBOOT_FIRST_CHECK_S, REBOOT_POLL_S,
+           REBOOT_GIVE_UP_S, modes)
 
 
-def _reboot_after_restore(s: Settings, steps: list, what: str) -> bool:
+def _reboot_after_restore(s: Settings, steps: list, what: str,
+                          modes: Optional[dict] = None) -> bool:
     """Reboot after a successful restore. Never raises; returns True if requested."""
     try:
         with _client(s) as c:
@@ -1437,14 +1538,15 @@ def _reboot_after_restore(s: Settings, steps: list, what: str) -> bool:
         return False
     steps.append("rebooting the robot so the %s takes effect (back in 2-4 minutes)" % what)
     store.log_event("info", "reboot", "rebooting the robot after the %s" % what)
-    _after_reboot(s, what)
+    _after_reboot(s, what, modes)
     return True
 
 
 def _confirm_back_after_reboot(s: Settings, what: str,
                                first_check: int = REBOOT_FIRST_CHECK_S,
                                poll: int = REBOOT_POLL_S,
-                               give_up: int = REBOOT_GIVE_UP_S) -> str:
+                               give_up: int = REBOOT_GIVE_UP_S,
+                               modes: Optional[dict] = None) -> str:
     """Wait for the robot to come back and record how it came back."""
     time.sleep(first_check)
     waited = first_check
@@ -1456,6 +1558,7 @@ def _confirm_back_after_reboot(s: Settings, what: str,
             if state == STATE_HEALTHY:
                 store.log_event("info", "reboot", "robot back %ds after the reboot "
                                 "(%s): HEALTHY" % (waited, what))
+                _reapply_modes(s, modes, what)
             elif done:
                 store.log_event("error", "reboot", "robot came back %ds after the "
                                 "reboot (%s) %s" % (waited, what, state))

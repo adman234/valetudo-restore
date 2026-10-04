@@ -459,6 +459,54 @@ class RobotClient:
                 pass
         return found
 
+    def valetudo_api(self, method: str, path: str, body: Optional[str] = None) -> str:
+        """
+        Call Valetudo's own API from the robot itself (localhost). The login
+        is read from the robot's config on the robot, so it never leaves it.
+        Returns the response body; "" if Valetudo did not answer.
+        """
+        script = (
+            "C=%s; "
+            "U=$(tr -d '\\n' < $C | sed -n 's/.*\"basicAuth\"[^}]*\"username\": *\"\\([^\"]*\\)\".*/\\1/p'); "
+            "P=$(tr -d '\\n' < $C | sed -n 's/.*\"basicAuth\"[^}]*\"password\": *\"\\([^\"]*\\)\".*/\\1/p'); "
+            "curl -s -m 10 -u \"$U:$P\" -X %s -H 'Content-Type: application/json' %s"
+            "http://127.0.0.1%s"
+        ) % (_q(P_CONFIG), method, ("-d %s " % _q(body)) if body is not None else "", path)
+        return self.run(script, timeout=self.timeout + 20)[1]
+
+    def user_modes(self) -> dict:
+        """
+        The two settings the firmware has been seen to reset around restores:
+        the cleaning mode ("vacuum", "vacuum_and_mop", ...) and Carpet Mode.
+        A value is None when Valetudo could not report it.
+        """
+        import json
+        modes = {"operation_mode": None, "carpet_mode": None}
+        try:
+            for a in json.loads(self.valetudo_api("GET", "/api/v2/robot/state/attributes")):
+                if a.get("__class") == "PresetSelectionStateAttribute" and a.get("type") == "operation_mode":
+                    modes["operation_mode"] = a.get("value")
+        except Exception:
+            pass
+        try:
+            v = json.loads(self.valetudo_api(
+                "GET", "/api/v2/robot/capabilities/CarpetModeControlCapability")).get("enabled")
+            if isinstance(v, bool):
+                modes["carpet_mode"] = v
+        except Exception:
+            pass
+        return modes
+
+    def set_user_modes(self, operation_mode: Optional[str] = None,
+                       carpet_mode: Optional[bool] = None) -> None:
+        import json
+        if operation_mode is not None:
+            self.valetudo_api("PUT", "/api/v2/robot/capabilities/OperationModeControlCapability/preset",
+                              json.dumps({"name": operation_mode}))
+        if carpet_mode is not None:
+            self.valetudo_api("PUT", "/api/v2/robot/capabilities/CarpetModeControlCapability",
+                              json.dumps({"action": "enable" if carpet_mode else "disable"}))
+
     # ---------- restore helpers ----------
     def rebuild_boot_hook(self, include_keeper: bool = True,
                           include_crash_keeper: bool = False) -> str:
