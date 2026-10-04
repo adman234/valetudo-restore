@@ -54,6 +54,19 @@ archive from another install), the restore installs the latest release, which
 is cached in `/config` so restores work with no internet, and says so in its
 steps. `/mnt/private` is the part that genuinely cannot be regenerated.
 
+## The robot's command channel
+
+Valetudo has controls for most things, but no way to pass an arbitrary command
+through, and a few firmware features have no Valetudo control. The robot's
+`miio_client` listens on UDP 54321 and takes the same JSON commands Valetudo
+sends it, encrypted with the device token. [`app/miio.py`](../app/miio.py) is a
+minimal client for it. The token is read from the robot over SSH each time
+(`/data/config/miio/device.token`), used, and never stored or logged; it is
+only ever sent back to the robot it came from.
+
+**Test command channel** (dashboard) is read-only. It needs UDP 54321 to be
+reachable from the container, which it is on the same LAN.
+
 ## Carpet strip
 
 **Strip detected carpet** (dashboard) and the **Nightly carpet strip** (Settings,
@@ -432,6 +445,7 @@ POST; use **Extra headers** for anything needing an auth token.
 | GET | `/api/backups/{file}` | download an archive |
 | POST | `/api/backups/{file}/delete` | delete an archive |
 | POST | `/api/install-helpers` | install or update wifi-keeper and crash-keeper without a restore |
+| POST | `/api/test-command-channel` | read-only: handshake with the robot's miIO channel (UDP 54321), read battery, status and the carpet settings, and list the carpet edits stored with the map |
 | POST | `/api/strip-carpet` | strip the detected carpet from the robot's map now (idle on the dock only; backs up first) |
 | POST | `/api/capture-diagnostics` | pull crash evidence off the robot now |
 | GET | `/api/diagnostics` | list diagnostics captures |

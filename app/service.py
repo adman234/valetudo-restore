@@ -29,6 +29,7 @@ from typing import Optional
 
 import httpx
 
+from . import miio
 from . import robot as R
 from . import strip_carpet as carpet
 from .models import BACKUP_DIR, CONFIG_DIR, Settings, load_settings
@@ -1256,6 +1257,52 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
         log.exception("map restore failed")
         store.log_event("error", "restore-map", "map restore FAILED: %s" % e, steps)
         return {"ok": False, "error": str(e), "steps": steps}
+
+
+# --------------------------------------------------------------------------
+# the robot's own command channel
+# --------------------------------------------------------------------------
+# Dreame properties worth reading back: siid, piid.
+MIOT_READ = {
+    "battery": (3, 1),
+    "status": (2, 1),
+    "carpet_recognition": (4, 33),
+    "carpet_cleaning": (4, 36),
+    "carpet_boost": (4, 12),
+}
+# Carpet handling, as the firmware numbers it.
+CARPET_CLEANING = {1: "avoid", 2: "adapt", 3: "remove mops", 4: "adapt, no carpet route",
+                   5: "vacuum and mop", 6: "ignore", 7: "cross"}
+
+
+def _miio(c: R.RobotClient, s: Settings) -> miio.MiioClient:
+    return miio.MiioClient(s.robot_host, c.device_token())
+
+
+def test_command_channel() -> dict:
+    """
+    Read-only check of the miIO channel (UDP 54321): a handshake, then a few
+    properties. It also reads the carpet edits stored with the map over SSH.
+    Changes nothing on the robot.
+    """
+    s = load_settings()
+    try:
+        with _client(s) as c:
+            p = c.probe()
+            if not p.ssh_ok:
+                raise R.RobotUnreachable(p.error or "probe failed")
+            m = _miio(c, s)
+            zones = c.carpet_zones()
+        m.hello()
+        got = m.get_properties(list(MIOT_READ.values()))
+        values = {name: got.get(key) for name, key in MIOT_READ.items()}
+        cc = values.get("carpet_cleaning")
+        return {"ok": True, "values": values,
+                "carpet_cleaning_means": CARPET_CLEANING.get(cc, "unknown"),
+                "carpet_zones": zones,
+                "note": "read only; nothing on the robot was changed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # --------------------------------------------------------------------------

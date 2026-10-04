@@ -331,6 +331,11 @@ def api_reboot_robot():
     return service.reboot_robot()
 
 
+@app.post("/api/test-command-channel")
+def api_test_command_channel():
+    return service.test_command_channel()
+
+
 @app.post("/api/strip-carpet")
 def api_strip_carpet():
     return service.strip_carpet(reason="manual")

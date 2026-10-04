@@ -44,6 +44,9 @@ P_CRASH_KEEPER = "/data/crash-keeper.sh"
 P_EVIDENCE = "/mnt/misc/vr-evidence"
 # DISARM=1|0: whether crash-keeper clears the watchdog's strike mark
 P_CK_CONF = "/data/crash-keeper.conf"
+# The robot's miIO device token: the key to its local command channel
+# (app/miio.py). Read when needed, never stored or logged.
+P_MIIO_TOKEN = "/data/config/miio/device.token"
 
 # Helper scripts ship inside the image (guard/ at the repo root), so a restore
 # can install the current version even onto a robot whose backup never had it.
@@ -458,6 +461,34 @@ class RobotClient:
             except ValueError:
                 pass
         return found
+
+    def device_token(self) -> bytes:
+        """The 16-byte miIO token, for app/miio.py. Do not log the result."""
+        token = self.read_file(P_MIIO_TOKEN).strip()[:16]
+        if len(token) != 16:
+            raise FileNotFoundError("%s does not hold a 16-byte token" % P_MIIO_TOKEN)
+        return token
+
+    def carpet_zones(self) -> dict:
+        """
+        The carpet edits stored with each saved map: "ignore carpet" rectangles
+        (nocpt) and hand-drawn carpets (addcpt), keyed by map file. Read from
+        /data/ri/<slot>.dat2, which is where ava keeps them.
+        """
+        import json
+        zones = {}
+        rc, out, _ = self.run("ls /data/ri/*.dat2 2>/dev/null")
+        for path in out.split():
+            try:
+                raw = self.read_file(path).decode("utf-8", "replace")
+                d = json.loads(raw[raw.index("{"):])
+            except Exception:
+                continue
+            zones[path.rsplit("/", 1)[-1]] = {
+                "nocpt": d.get("virtual_wall_nocpt_rects_reuseinfo"),
+                "addcpt": d.get("virtual_wall_addcpt_rects_reuseinfo"),
+            }
+        return zones
 
     def valetudo_api(self, method: str, path: str, body: Optional[str] = None) -> str:
         """
