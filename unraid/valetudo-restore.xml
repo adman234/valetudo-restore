@@ -65,6 +65,12 @@
   <Config Name="Carpet strip time" Target="VR_AUTO_STRIP_TIME" Default="02:00"
           Description="HH:MM in the container timezone. Pick a time before the robot firmware reboots itself (03:00 to 05:00 UTC)."
           Type="Variable" Display="advanced" Required="false" Mask="false">02:00</Config>
+  <Config Name="Save carpet overrides" Target="VR_SAVE_CARPET_OVERRIDES" Default="false"
+          Description="Record the robot's carpet detection overrides (ultrasonic sensor off, camera carpet switch, carpet sensitivity, laser carpet inspection off) in each backup."
+          Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Restore carpet overrides" Target="VR_RESTORE_CARPET_OVERRIDES" Default="false"
+          Description="After a restore, put the carpet detection overrides from that backup back on the robot."
+          Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="Webhook URL" Target="VR_WEBHOOK_URL" Default=""
           Description="Notification webhook (Home Assistant, ntfy, Discord...). Leave empty to disable notifications."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>

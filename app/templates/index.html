@@ -45,6 +45,10 @@
       wipes prevented: {{ wipe_guard.get('prevented', 0) }}</div>
     <div class="sub">carpet strip: {% if s.auto_strip_carpet %}nightly at {{ s.auto_strip_time }}{% if strip_pending %}, waiting for the robot{% endif %}{% else %}manual only{% endif %}{% if last_strip.get('ts') %},
       last {{ last_strip.ts|ts }}: {{ "ok" if last_strip.ok else "failed" }}{% endif %}</div>
+    {% if s.save_carpet_overrides or s.restore_carpet_overrides %}
+    <div class="sub">carpet overrides: {% if s.save_carpet_overrides %}saved with backups{% else %}not saved{% endif %}, {% if s.restore_carpet_overrides %}put back on restore{% else %}not put back{% endif %}{% if carpet_saved.get('values') %}
+      (latest: {{ carpet_saved['values']|join(', ') }}){% endif %}</div>
+    {% endif %}
   </div>
 </section>
 

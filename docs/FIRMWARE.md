@@ -332,3 +332,34 @@ would break precisely when recovery is needed.
 
 **Restores are budgeted.** Repeated failures back off and stop rather than
 hammering a robot that is genuinely broken.
+
+## Carpet detection overrides
+
+The strip removes carpet the robot already detected. These settings make it detect
+less in the first place. None survive a wipe or a restore, so the app can save them
+with each backup (**Save the robot's carpet detection overrides in each backup**) and
+put them back (**Put the overrides from the backup back on a restore**). Both are
+off by default.
+
+| Override | Where | Notes |
+|---|---|---|
+| Ultrasonic carpet sensor off | MIoT siid 28, piid 26 | `disable_ultrasonic_carpet` in the firmware's handler for the app's device settings; found in the firmware, confirmed by writing it and watching `/data/zt_conmon_file/device_msg.json` change. A restore brings it back as 0. |
+| Camera carpet segmentation | siid 28, piid 37 | `CARPET_AI_SEGMENT` in the Home Assistant Dreame integration. Which value means "on" is not known. |
+| Carpet sensitivity | siid 4, piid 28 | 1 low, 2 medium, 3 high. Stored in `clean_parameter.json` as `CarpetPressState`, so a restore usually keeps it. |
+| Laser carpet inspection off | boot hook | `carpet_inspect` and `carpet_fine` in `/ava/conf/laser_transfer_conf.json` set to `false`. That file is on the read-only rootfs, so a copy is bind-mounted over it from `/data/_root_postboot.sh`, which a restore rebuilds from the template. |
+
+Saving reads the three values over the robot's command channel (UDP 54321, the same
+one the **Test command channel** button uses) and checks whether the laser override is
+mounted. The result goes into the backup's manifest. A robot whose command channel
+does not answer costs nothing: the backup is made without them and the event log says
+so.
+
+Restoring (full restores only; a map-only restore leaves the robot's current values
+alone) adds the laser block to the rebuilt boot hook and mounts it while ava is
+stopped, so the ava that starts next reads it. Once the robot is back after the reboot
+it sets any of the three values that differ, reads them back, and, if the laser
+override is not mounted, applies it. The event log lists what was put back.
+
+The boot-hook block restarts ava once after mounting, because ava is started before the
+hook runs and may already have read the original file. It writes
+`/tmp/carpet-overrides.log` with when it mounted and restarted.

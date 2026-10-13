@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from pathlib import Path
 import socket
 from dataclasses import dataclass
@@ -47,6 +48,57 @@ P_CK_CONF = "/data/crash-keeper.conf"
 # The robot's miIO device token: the key to its local command channel
 # (app/miio.py). Read when needed, never stored or logged.
 P_MIIO_TOKEN = "/data/config/miio/device.token"
+
+# The line laser adds carpet outlines to the map. Its node reads a read-only rootfs file, so the
+# override is a copy with the two switches off, bind-mounted over the original. It has to be
+# redone on every boot (the mount is gone, and a wipe or a restore rebuilds the hook), hence a
+# block in the boot hook. ava is started before the hook runs and may already have read the
+# original, so the block restarts it once after mounting.
+LASER_CONF = "/ava/conf/laser_transfer_conf.json"
+LASER_CONF_COPY = "/tmp/laser_transfer_conf.json"
+_LASER_SED = ("sed -e 's/\"carpet_inspect\": *true/\"carpet_inspect\": false/' "
+              "-e 's/\"carpet_fine\": *true/\"carpet_fine\": false/' %s > %s"
+              % (LASER_CONF, LASER_CONF_COPY))
+OVERRIDE_BEGIN = "# >>> carpet-overrides (valetudo-restore) >>>"
+OVERRIDE_END = "# <<< carpet-overrides (valetudo-restore) <<<"
+LASER_OVERRIDE_BLOCK = OVERRIDE_BEGIN + """
+# The line laser adds carpet outlines to the map. The node reads the read-only rootfs file
+# /ava/conf/laser_transfer_conf.json, so a copy with carpet_inspect and carpet_fine set to false
+# is bind-mounted over it, rebuilt from the original on every boot. ava is started before this
+# hook runs and may already have read the original, so it is restarted once after the mount.
+if [ -f /ava/conf/laser_transfer_conf.json ] && ! grep -q '"carpet_inspect": false' /ava/conf/laser_transfer_conf.json; then
+        if """ + _LASER_SED + """ \\
+                && grep -q '"carpet_inspect": false' """ + LASER_CONF_COPY + """ \\
+                && mount --bind """ + LASER_CONF_COPY + " " + LASER_CONF + """; then
+                echo "[$(cut -d' ' -f1 /proc/uptime)] laser override mounted" >> /tmp/carpet-overrides.log
+                if pidof ava > /dev/null; then
+                        sh /etc/rc.d/miio.sh stop > /dev/null 2>&1
+                        killall ava
+                        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do pidof ava > /dev/null || break; sleep 1; done
+                        pidof ava > /dev/null && killall -9 ava
+                        sh /etc/rc.d/ava.sh > /dev/null 2>&1 &
+                        sh /etc/rc.d/miio.sh > /dev/null 2>&1 &
+                        echo "[$(cut -d' ' -f1 /proc/uptime)] ava restarted" >> /tmp/carpet-overrides.log
+                fi
+        fi
+fi
+""" + OVERRIDE_END + "\n"
+
+# What an earlier hand-installed version of the block looked like: it carried no markers.
+_OLD_OVERRIDE = re.compile(
+    r"\n?# laser carpet inspection off \(valetudo-restore experiment\).*?\nfi\n", re.S)
+_NEW_OVERRIDE = re.compile(
+    r"\n?" + re.escape(OVERRIDE_BEGIN) + r".*?" + re.escape(OVERRIDE_END) + r"[^\n]*\n", re.S)
+
+
+def hook_with_laser_override(text: str) -> str:
+    """
+    The boot hook text with the laser override block in it, once, at the end (after
+    Valetudo and the keepers start, because the block can wait up to 15 s for ava to
+    exit). Any older copy of the block is replaced. Idempotent.
+    """
+    base = _NEW_OVERRIDE.sub("\n", _OLD_OVERRIDE.sub("\n", text)).rstrip("\n")
+    return base + "\n\n" + LASER_OVERRIDE_BLOCK
 
 # Helper scripts ship inside the image (guard/ at the repo root), so a restore
 # can install the current version even onto a robot whose backup never had it.
@@ -570,6 +622,53 @@ class RobotClient:
         else:
             self.run("chmod 0755 " + P_POSTBOOT)
         return self.read_file(P_POSTBOOT).decode("utf-8", "replace")
+
+    # ---------- carpet detection overrides ----------
+    def laser_override_state(self) -> dict:
+        """Is the laser override mounted right now, and is the block in the boot hook?"""
+        rc, out, _ = self.run(
+            "echo MOUNTED=$(grep -c '\"carpet_inspect\": false' %s 2>/dev/null); "
+            "echo HOOK=$(grep -c 'carpet-overrides (valetudo-restore)' %s 2>/dev/null)"
+            % (LASER_CONF, P_POSTBOOT))
+        n = {}
+        for line in out.splitlines():
+            if "=" in line:
+                k, _, v = line.strip().partition("=")
+                try:
+                    n[k] = int(v or 0)
+                except ValueError:
+                    n[k] = 0
+        return {"mounted": n.get("MOUNTED", 0) > 0, "hook": n.get("HOOK", 0) > 0}
+
+    def install_laser_override(self) -> bool:
+        """Put the override block in the boot hook. True if the hook changed."""
+        cur = self.read_file(P_POSTBOOT).decode("utf-8", "replace")
+        new = hook_with_laser_override(cur)
+        if new == cur:
+            return False
+        self.write_file(P_POSTBOOT, new.encode("utf-8"), mode="0755")
+        return True
+
+    def mount_laser_override(self) -> str:
+        """
+        Mount the override now. Only takes effect for an ava that starts afterwards, so
+        callers use it while ava is stopped. Returns "mounted", "already" or "failed".
+        """
+        rc, out, _ = self.run(
+            "if grep -q '\"carpet_inspect\": false' %s; then echo already; "
+            "elif %s && grep -q '\"carpet_inspect\": false' %s "
+            "&& mount --bind %s %s; then echo mounted; else echo failed; fi"
+            % (LASER_CONF, _LASER_SED, LASER_CONF_COPY, LASER_CONF_COPY, LASER_CONF))
+        word = out.strip().splitlines()[-1] if out.strip() else "failed"
+        return word if word in ("mounted", "already") else "failed"
+
+    def apply_laser_override_live(self) -> str:
+        """Stop ava, mount the override, start ava again. Returns the mount result."""
+        self.stop_map_processes()
+        try:
+            return self.mount_laser_override()
+        finally:
+            self.start_map_processes()
 
     def start_valetudo(self) -> None:
         # setsid: a plain `&` over an ssh exec channel can die with the session.

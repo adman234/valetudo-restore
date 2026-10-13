@@ -148,3 +148,17 @@ class MiioClient:
     def action(self, siid: int, aiid: int, params: list[dict]) -> dict:
         did = str(self.device_id or self.hello())
         return self.send("action", {"did": did, "siid": siid, "aiid": aiid, "in": params})
+
+    def set_properties(self, props: dict) -> dict:
+        """
+        Set MIoT properties: {(siid, piid): value}. Returns {(siid, piid): ok},
+        where ok is the per-property result code == 0. A refused request raises.
+        """
+        did = str(self.device_id or self.hello())
+        res = self.send("set_properties",
+                        [{"did": did, "siid": s, "piid": p, "value": v}
+                         for (s, p), v in props.items()])
+        out = {}
+        for r in res.get("result") or []:
+            out[(r.get("siid"), r.get("piid"))] = r.get("code") == 0
+        return out

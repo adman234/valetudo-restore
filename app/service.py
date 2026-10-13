@@ -456,6 +456,70 @@ def _pull_dir(c, remote: str, timeout: int = 300, tries: int = 3) -> bytes:
     raise IOError("could not copy %s intact after %d tries (%s)" % (remote, tries, last))
 
 
+# The carpet detection overrides: settings that make the robot detect less carpet, none of which
+# survive a wipe or a restore by themselves. MIoT (siid, piid) for the three the robot reports
+# over miIO; the laser one is a boot-hook block (see robot.LASER_OVERRIDE_BLOCK). 28/26 is not in
+# any public property list: it was found in the firmware (the handler for the app's device
+# settings, `disable_ultrasonic_carpet`) and confirmed by writing it and watching
+# /data/zt_conmon_file/device_msg.json change. 28/37 is CARPET_AI_SEGMENT in the Home Assistant
+# Dreame integration; which of its values means "on" is not known. 4/28 is carpet sensitivity.
+CARPET_OVERRIDE_PROPS = {
+    "ultrasonic_disabled": (28, 26),
+    "camera_carpet_segment": (28, 37),
+    "carpet_sensitivity": (4, 28),
+}
+OVERRIDE_KEYS = tuple(CARPET_OVERRIDE_PROPS) + ("laser_inspect_off",)
+_SENSITIVITY = {1: "low", 2: "medium", 3: "high"}
+
+
+def _fmt_override(name: str, value) -> str:
+    if name == "ultrasonic_disabled":
+        return "ultrasonic carpet sensor %s" % ("off" if value else "on")
+    if name == "camera_carpet_segment":
+        return "camera carpet segmentation switch %s" % value
+    if name == "carpet_sensitivity":
+        return "carpet sensitivity %s" % _SENSITIVITY.get(value, value)
+    return "laser carpet inspection %s" % ("off" if value else "on")
+
+
+def capture_carpet_overrides(c: R.RobotClient, s: Settings) -> dict:
+    """
+    The robot's current carpet detection overrides, for the backup manifest. Never raises:
+    a robot whose miIO channel does not answer must not cost a backup. What could not be
+    read is left out and the reason recorded.
+    """
+    out: dict = {"captured": datetime.now(timezone.utc).isoformat()}
+    try:
+        m = _miio(c, s)
+        m.hello()
+        got = m.get_properties(list(CARPET_OVERRIDE_PROPS.values()))
+        for name, key in CARPET_OVERRIDE_PROPS.items():
+            if got.get(key) is not None:
+                out[name] = got[key]
+    except Exception as e:
+        out["miio_error"] = str(e)[:200]
+    try:
+        out["laser_inspect_off"] = bool(c.laser_override_state()["mounted"])
+    except Exception as e:
+        out["laser_error"] = str(e)[:200]
+    return out
+
+
+def overrides_from_manifest(doc: Optional[dict]) -> dict:
+    """The usable overrides in a backup's manifest: known keys with sane values only."""
+    raw = (doc or {}).get("carpet_overrides")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for name in CARPET_OVERRIDE_PROPS:
+        v = raw.get(name)
+        if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 255:
+            out[name] = v
+    if isinstance(raw.get("laser_inspect_off"), bool):
+        out["laser_inspect_off"] = raw["laser_inspect_off"]
+    return out
+
+
 @_exclusive
 def run_backup(kind: str = "scheduled") -> dict:
     """
@@ -529,6 +593,13 @@ def run_backup(kind: str = "scheduled") -> dict:
 
                 if probe.binary_present:
                     manifest["valetudo_build"] = capture_build(c, cfg_bytes)
+                if s.save_carpet_overrides and probe.binary_present:
+                    manifest["carpet_overrides"] = capture_carpet_overrides(c, s)
+                    co = manifest["carpet_overrides"]
+                    if "miio_error" in co or "laser_error" in co:
+                        store.log_event("warn", "backup",
+                                        "carpet overrides only partly saved: %s"
+                                        % (co.get("miio_error") or co.get("laser_error")))
                 mdata = json.dumps(manifest, indent=2).encode()
                 mi = tarfile.TarInfo("manifest.json")
                 mi.size = len(mdata)
@@ -539,8 +610,14 @@ def run_backup(kind: str = "scheduled") -> dict:
         size = path.stat().st_size
         captured = sum(1 for i in manifest["items"] if i["status"] == "ok")
         label = build_label(manifest.get("valetudo_build"))
+        saved = overrides_from_manifest(manifest)
         store.add_backup(name, size, kind, True,
-                         "%d items" % captured + (", " + label if label else ""))
+                         "%d items" % captured + (", " + label if label else "")
+                         + (", carpet overrides" if saved else ""))
+        if saved:
+            store.kv_set("carpet_overrides_saved", {
+                "file": name, "ts": int(time.time()),
+                "values": [_fmt_override(k, saved[k]) for k in OVERRIDE_KEYS if k in saved]})
         assess_pending()
         row = next((b for b in store.list_backups() if b["filename"] == name), {})
         if row.get("full"):
@@ -675,10 +752,14 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
             vendor_cfg = member("data_config.tar.gz")
             map_have, map_vendor, map_missing = _read_map_members(tar)
             try:
-                build = json.loads(tar.extractfile("manifest.json").read()).get(
-                    "valetudo_build") or {}
+                manifest_doc = json.loads(tar.extractfile("manifest.json").read())
             except Exception:
-                build = {}
+                manifest_doc = {}
+            build = manifest_doc.get("valetudo_build") or {}
+            # The carpet detection overrides this backup was taken with, when asked for.
+            overrides = overrides_from_manifest(manifest_doc) if s.restore_carpet_overrides else {}
+            if s.restore_carpet_overrides and not overrides:
+                steps.append("carpet overrides: this backup has none saved, so none are put back")
 
             # The build this backup was taken with, if it is stored here.
             # Otherwise the release is the fallback, unless the robot already
@@ -809,6 +890,28 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 except Exception as e:
                     steps.append("boot hook rebuild FAILED: %s" % e)
 
+                # 4a. The laser carpet override lives in the boot hook, which the rebuild
+                # above just reset to the template, so it goes back in here. The mount is
+                # done below while ava is stopped, so the ava that starts reads it.
+                laser = bool(overrides.get("laser_inspect_off"))
+                if laser:
+                    try:
+                        c.install_laser_override()
+                        steps.append("laser carpet override added to the boot hook")
+                    except Exception as e:
+                        steps.append("laser carpet override NOT added to the boot hook: %s" % e)
+
+                def mount_laser_while_stopped() -> None:
+                    if not laser:
+                        return
+                    try:
+                        res = c.mount_laser_override()
+                        steps.append("laser carpet override %s" % (
+                            "mounted for the ava that starts next" if res == "mounted"
+                            else "already mounted" if res == "already" else "mount FAILED"))
+                    except Exception as e:
+                        steps.append("laser carpet override mount FAILED: %s" % e)
+
                 # 4b. The map, and the ava restart that makes everything above
                 # take effect. ava reads /data/config/ava at STARTUP and holds
                 # the values in memory, so writing clean_parameter.json under a
@@ -819,6 +922,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 if map_have and "data_map.tar.gz" in map_have and not map_missing:
                     c.stop_map_processes()
                     steps.append("stopped ava + miio_client")
+                    mount_laser_while_stopped()
                     try:
                         _swap_map_paths(c, map_have, map_vendor, steps)
                     finally:
@@ -829,10 +933,12 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
                                  % ", ".join(map_missing))
                     # still restart ava so the vendor settings take effect
                     c.stop_map_processes()
+                    mount_laser_while_stopped()
                     c.start_map_processes()
                     steps.append("restarted ava + miio_client (settings now applied)")
                 else:
                     c.stop_map_processes()
+                    mount_laser_while_stopped()
                     c.start_map_processes()
                     steps.append("restarted ava + miio_client (settings now applied)")
 
@@ -865,10 +971,13 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
         # resets Carpet Mode's master copy, which no restored file overrides,
         # so both are checked once the robot is back and set through Valetudo.
         modes = _modes_from_backup(vendor_cfg) if s.restore_vendor_settings else {}
+        if overrides:
+            # Carried alongside the modes: the same "robot is back" step puts both back.
+            modes["carpet_overrides"] = overrides
         rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(
             s, steps, "restore", modes)
         if not rebooting:
-            _spawn(_reapply_modes, s, modes, "restore")
+            _spawn(_reapply_after_restore, s, modes, "restore")
         store.log_event("info", "restore",
                         "restore from %s (%s)" % (chosen["filename"], reason), steps)
         if s.notify_on_restore:
@@ -1621,6 +1730,83 @@ def _reapply_modes(s: Settings, want: Optional[dict], what: str,
         return {}
 
 
+def _reapply_carpet_overrides(s: Settings, want: Optional[dict], what: str,
+                              wait: int = MODES_WAIT_S, poll: int = MODES_POLL_S) -> dict:
+    """
+    Once the robot is back after a restore, put the carpet detection overrides from the
+    backup back: the three MIoT values over miIO (the restore leaves some of them at the
+    firmware default), and the laser override if it is not active. Waits for the robot's
+    command channel, since miio_client answers later than SSH does. Never raises.
+    Returns {"fixed": [...], "failed": [...]}.
+    """
+    want = {k: v for k, v in (want or {}).items() if k in OVERRIDE_KEYS and v is not None}
+    props = {CARPET_OVERRIDE_PROPS[k]: v for k, v in want.items() if k in CARPET_OVERRIDE_PROPS}
+    laser = bool(want.get("laser_inspect_off"))
+    if not props and not laser:
+        return {}
+    by_key = {key: name for name, key in CARPET_OVERRIDE_PROPS.items()}
+    waited = 0
+    try:
+        while True:
+            try:
+                with _client(s) as c:
+                    fixed, failed = [], []
+                    if props:
+                        m = _miio(c, s)
+                        m.hello()
+                        have = m.get_properties(list(props))
+                        if any(have.get(k) is None for k in props):
+                            raise miio.MiioError("the robot did not report the carpet properties yet")
+                        wrong = {k: v for k, v in props.items() if have.get(k) != v}
+                        if wrong:
+                            m.set_properties(wrong)
+                            time.sleep(2)
+                            after = m.get_properties(list(wrong))
+                            for key, v in wrong.items():
+                                (fixed if after.get(key) == v else failed).append(
+                                    _fmt_override(by_key[key], v))
+                    if laser:
+                        state = c.laser_override_state()
+                        if not state["mounted"]:
+                            c.install_laser_override()
+                            res = c.apply_laser_override_live()
+                            label = _fmt_override("laser_inspect_off", True)
+                            (fixed if res in ("mounted", "already") else failed).append(label)
+                    if fixed:
+                        store.log_event("info", "settings",
+                                        "carpet overrides put back after the %s: %s"
+                                        % (what, ", ".join(fixed)))
+                    if failed:
+                        store.log_event("warn", "settings",
+                                        "after the %s these carpet overrides could not be put "
+                                        "back: %s" % (what, ", ".join(failed)))
+                    if not fixed and not failed:
+                        store.log_event("info", "settings",
+                                        "carpet overrides after the %s were already as in the "
+                                        "backup" % what)
+                    return {"fixed": fixed, "failed": failed}
+            except (miio.MiioError, OSError, R.RobotUnreachable, R.RobotAuthError) as e:
+                log.info("carpet overrides after the %s: not ready yet (%s)", what, e)
+            if waited >= wait:
+                store.log_event("warn", "settings",
+                                "could not put the carpet overrides back after the %s: the "
+                                "robot's command channel did not answer within %ds" % (what, wait))
+                return {}
+            time.sleep(poll)
+            waited += poll
+    except Exception as e:
+        log.warning("re-applying carpet overrides after the %s failed: %s", what, e)
+        store.log_event("warn", "settings",
+                        "could not put the carpet overrides back after the %s: %s" % (what, e))
+        return {}
+
+
+def _reapply_after_restore(s: Settings, modes: Optional[dict], what: str) -> None:
+    """Everything the firmware undoes around a restore, once the robot is back."""
+    _reapply_modes(s, modes, what)
+    _reapply_carpet_overrides(s, (modes or {}).get("carpet_overrides"), what)
+
+
 def _after_reboot(s: Settings, what: str, modes: Optional[dict] = None) -> None:
     """
     The robot was just told to reboot. Show it as OFFLINE (it is about to be)
@@ -1665,7 +1851,7 @@ def _confirm_back_after_reboot(s: Settings, what: str,
             if state == STATE_HEALTHY:
                 store.log_event("info", "reboot", "robot back %ds after the reboot "
                                 "(%s): HEALTHY" % (waited, what))
-                _reapply_modes(s, modes, what)
+                _reapply_after_restore(s, modes, what)
             elif done:
                 store.log_event("error", "reboot", "robot came back %ds after the "
                                 "reboot (%s) %s" % (waited, what, state))

@@ -72,6 +72,16 @@ class Settings(BaseModel):
     auto_strip_carpet: bool = False
     auto_strip_time: str = Field("02:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
+    # --- carpet detection overrides ---
+    # Settings that make the robot detect less carpet: the ultrasonic carpet sensor
+    # switched off, the camera's carpet classifier, a lower carpet sensitivity, and
+    # the line laser's carpet inspection (a config override in the boot hook).
+    # None of them survive a wipe or a restore on their own. Both are opt-in.
+    # Save the robot's current values in each backup's manifest...
+    save_carpet_overrides: bool = False
+    # ...and put the values from the backup being restored back on the robot.
+    restore_carpet_overrides: bool = False
+
     # --- notifications ---
     notify_on_wipe: bool = True
     notify_on_crash: bool = True
@@ -132,6 +142,8 @@ ENV_MAP = {
     "VR_PREVENT_WIPES": "prevent_wipes",
     "VR_AUTO_STRIP_CARPET": "auto_strip_carpet",
     "VR_AUTO_STRIP_TIME": "auto_strip_time",
+    "VR_SAVE_CARPET_OVERRIDES": "save_carpet_overrides",
+    "VR_RESTORE_CARPET_OVERRIDES": "restore_carpet_overrides",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",
     "VR_NOTIFY_ON_WIPE": "notify_on_wipe",

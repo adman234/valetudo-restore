@@ -220,6 +220,8 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
 | `VR_AUTO_STRIP_CARPET` | `false` | nightly carpet strip: remove the detected carpet from the robot's map once a night (room materials stay) |
 | `VR_AUTO_STRIP_TIME` | `02:00` | when, `HH:MM` in the container's timezone; pick a time before the robot's own 03:00-05:00 UTC reboot |
+| `VR_SAVE_CARPET_OVERRIDES` | `false` | record the robot's carpet detection overrides (ultrasonic sensor, camera carpet switch, carpet sensitivity, laser inspection) in each backup's manifest |
+| `VR_RESTORE_CARPET_OVERRIDES` | `false` | after a full restore, put the overrides from that backup back (miIO switches set and read back; laser override added to the boot hook and mounted) |
 | `VR_PREVENT_WIPES` | `true` | wipe guard: crash-keeper clears the watchdog's first-strike mark so crashes reboot the robot instead of wiping it (at most 3 in a row) |
 | `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
 | `VR_RESTORE_DUSTSTREAMER` | `true` | reinstall duststreamer if the backup has it |
