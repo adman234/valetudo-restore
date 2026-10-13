@@ -15,6 +15,7 @@ overwriting a perfectly healthy robot.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import json
@@ -23,6 +24,8 @@ import os
 import tarfile
 import threading
 import time
+import uuid
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -397,6 +400,63 @@ def _skipped_note(rows: list, chosen: dict) -> Optional[str]:
             % (len(newer), ", ".join(r["filename"] for r in newer)))
 
 
+# One backup, strip or restore at a time. They share the robot's map and used to share one
+# staging file in /tmp, so two at once corrupted each other's archives: on 2026-10-13 the 02:00
+# strip and the monitor poll that retries it both started a strip, and both pre-strip backups
+# came out with truncated or swapped archives. Re-entrant, because strip_carpet calls
+# run_backup and restore_map itself.
+_ROBOT_OPS = threading.RLock()
+
+
+def _exclusive(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _ROBOT_OPS.acquire(blocking=False):
+            return {"ok": False, "busy": True,
+                    "error": "another backup, strip or restore is already running"}
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _ROBOT_OPS.release()
+    return wrapper
+
+
+def _pull_dir(c, remote: str, timeout: int = 300, tries: int = 3) -> bytes:
+    """
+    tar a robot directory into a staging file with a name nothing else uses, copy it
+    back, and check the copy: it must match the md5 the robot computed and be a complete
+    gzip stream. A short or mixed-up transfer is retried; if it keeps failing the item
+    fails (the backup is then flagged incomplete) instead of a bad archive being stored.
+    """
+    last = "unknown"
+    for attempt in range(1, tries + 1):
+        stage = "/tmp/_vr_%s.tgz" % uuid.uuid4().hex[:12]
+        try:
+            c.run("tar -czf %s -C %s . 2>/dev/null" % (stage, R._q(remote)), timeout=180)
+            want = c.md5(stage)
+            data = c.read_file(stage, timeout=timeout)
+            if not want:
+                last = "the robot could not hash its archive"
+            elif hashlib.md5(data).hexdigest() != want:
+                last = "the copy differs from the robot's archive (%d bytes received)" % len(data)
+            else:
+                d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                d.decompress(data)
+                if d.eof:
+                    return data
+                last = "the archive is truncated"
+        except Exception as e:      # a dropped connection, a zlib error: try again
+            last = "%s: %s" % (type(e).__name__, e)
+        finally:
+            try:
+                c.run("rm -f %s" % stage)
+            except Exception:
+                pass
+        log.warning("copying %s, attempt %d of %d failed: %s", remote, attempt, tries, last)
+    raise IOError("could not copy %s intact after %d tries (%s)" % (remote, tries, last))
+
+
+@_exclusive
 def run_backup(kind: str = "scheduled") -> dict:
     """
     Pull the robot's irreplaceable state into a single .tar.gz.
@@ -446,11 +506,7 @@ def run_backup(kind: str = "scheduled") -> dict:
                                 manifest["items"].append(
                                     {"path": remote, "status": "absent"})
                                 continue
-                            rc, _, err = c.run(
-                                "tar -czf /tmp/_vr_bk.tgz -C %s . 2>/dev/null"
-                                % R._q(remote), timeout=180)
-                            data = c.read_file("/tmp/_vr_bk.tgz", timeout=300)
-                            c.run("rm -f /tmp/_vr_bk.tgz")
+                            data = _pull_dir(c, remote)
                         else:
                             if not c.path_exists(remote):
                                 manifest["items"].append(
@@ -548,6 +604,7 @@ def prune_backups(s: Settings) -> int:
 # --------------------------------------------------------------------------
 # restore
 # --------------------------------------------------------------------------
+@_exclusive
 def run_restore(filename: Optional[str] = None, reason: str = "manual",
                 blob: Optional[bytes] = None) -> dict:
     """
@@ -892,10 +949,7 @@ def capture_diagnostics(reason: str, force: bool = False) -> dict:
                         if not c.path_exists(remote):
                             continue
                         if is_dir:
-                            c.run("tar -czf /tmp/_vr_d.tgz -C %s . 2>/dev/null"
-                                  % R._q(remote), timeout=120)
-                            data = c.read_file("/tmp/_vr_d.tgz", timeout=180)
-                            c.run("rm -f /tmp/_vr_d.tgz")
+                            data = _pull_dir(c, remote, timeout=180)
                         else:
                             data = c.read_file(remote)
                         info = tarfile.TarInfo(member); info.size = len(data)
@@ -1158,6 +1212,7 @@ def _read_map_members(tar):
     return have, vendor_map, missing
 
 
+@_exclusive
 def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
                 force: bool = False) -> dict:
     """
@@ -1313,6 +1368,7 @@ def test_command_channel() -> dict:
 AUTO_STRIP_RETRY_S = 90 * 60
 
 
+@_exclusive
 def strip_carpet(reason: str = "manual") -> dict:
     """
     Remove the carpet the robot DETECTED from its map. Per-room floor
@@ -1449,6 +1505,10 @@ def auto_strip_tick(scheduled: bool = False) -> dict:
                            AUTO_STRIP_RETRY_S // 60))
         return {"ok": False, "error": "gave up"}
     res = strip_carpet(reason="nightly")
+    if res.get("busy") and str(res.get("error", "")).startswith("another backup"):
+        # A strip, backup or restore is already in progress (the scheduled call and the
+        # monitor poll can overlap). That run clears the pending marker when it finishes.
+        return res
     if res.get("busy") or res.get("unreachable"):
         why = res.get("error") or "the robot was not ready"
         if not pending.get("waiting"):
