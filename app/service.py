@@ -299,6 +299,19 @@ def _named_rooms(cfg_tgz: bytes) -> int:
                if isinstance(r, dict) and r.get("name"))
 
 
+def _map_bytes(map_tgz: bytes) -> int:
+    """
+    How much real map data data_map.tar.gz holds: the files over 1 KB. The small
+    json bookkeeping files are there even on a robot with no map at all, so
+    counting them would make an empty map look like one.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(map_tgz)) as t:
+            return sum(m.size for m in t.getmembers() if m.isfile() and m.size > 1024)
+    except Exception:
+        return 0
+
+
 def archive_facts(path: Path) -> dict:
     """What an archive holds, as far as judging its completeness goes."""
     with tarfile.open(path, "r:gz") as tar:
@@ -312,8 +325,11 @@ def archive_facts(path: Path) -> dict:
         rooms = 0
         if "data_config.tar.gz" in names:
             rooms = _named_rooms(tar.extractfile("data_config.tar.gz").read())
+        # None when the member is absent: that is reported as "missing", not twice
+        map_bytes = (_map_bytes(tar.extractfile("data_map.tar.gz").read())
+                     if "data_map.tar.gz" in names else None)
     return {"members": names - {"manifest.json"}, "rooms": rooms,
-            "robot": manifest.get("robot_state")}
+            "map_bytes": map_bytes, "robot": manifest.get("robot_state")}
 
 
 def assess_backup(facts: dict, baseline: Optional[dict]) -> list[str]:
@@ -341,7 +357,19 @@ def assess_backup(facts: dict, baseline: Optional[dict]) -> list[str]:
         reasons.append("no named rooms (the last full backup had %d), so the map "
                        "is most likely the placeholder a wipe leaves behind"
                        % baseline["rooms"])
+    # The room names live in the vendor config, which survives a map reset, so a
+    # robot whose map was wiped or reset can still have named rooms. The map data
+    # itself is what is missing.
+    if baseline and baseline.get("map_bytes") and facts.get("map_bytes") == 0:
+        reasons.append("no map data (the last full backup had a map), so the robot had "
+                       "no map when this was taken, for example after a map reset or "
+                       "while re-mapping")
     return reasons
+
+
+# Bump when assess_backup learns a new check, so verdicts reached under the old rules
+# are redone once. A user's "mark as full" is never touched by this.
+ASSESS_VERSION = 2
 
 
 def assess_pending() -> int:
@@ -350,6 +378,11 @@ def assess_pending() -> int:
     and rows from before this check existed. Oldest first, so each is compared
     with the newest full backup that came before it. Returns how many ran.
     """
+    if store.kv_get("assess_version") != ASSESS_VERSION:
+        store.reset_assessments()
+        store.kv_set("assess_version", ASSESS_VERSION)
+        store.log_event("info", "backup", "backup checks updated; every backup is being "
+                        "judged again")
     cache: dict = {}
 
     def facts_of(fn: str) -> Optional[dict]:
@@ -1477,6 +1510,17 @@ def strip_carpet(reason: str = "manual") -> dict:
                          "carpet stripped from %s" % bk["file"])
         assess_pending()
 
+        # The robot was idle when this began, but the backup and the strip take a minute
+        # or two, and a clean may have been started since. Look again before swapping
+        # its map out from under it. The stripped copy stays as a backup.
+        with _client(s) as c:
+            now_state = c.task_state()
+        if not now_state["idle"] or now_state["status"] != "docked":
+            steps.append("the robot left its dock while the backup was taken")
+            return done(False, busy=True,
+                        error="the robot is no longer idle on its dock (status: %s); the map "
+                              "was not touched" % (now_state["status"] or "unknown"))
+
         res = restore_map(filename=name)
         steps.extend(res.get("steps") or [])
         if not res.get("ok"):
@@ -1488,7 +1532,8 @@ def strip_carpet(reason: str = "manual") -> dict:
 
         # One pre-strip backup is the way back; older ones are just churn.
         for row in store.list_backups():
-            if row["kind"] == "pre-strip" and row["filename"] != bk["file"]:
+            if (row["kind"] == "pre-strip" and row["filename"] != bk["file"]
+                    and not row.get("preferred")):
                 (BACKUP_DIR / row["filename"]).unlink(missing_ok=True)
                 store.forget_backup(row["filename"])
         note = ("removed %d outline(s) and %d carpet cell(s) (%s)"
@@ -1550,6 +1595,54 @@ def auto_strip_tick(scheduled: bool = False) -> dict:
         store.kv_set("auto_strip_pending", pending)
         return res
     store.kv_set("auto_strip_pending", {})
+    return res
+
+
+# After a clean: the robot draws the carpet it found into its map as the clean ends, and
+# a map with carpet on it is what ava can crash on at the next clean or boot. So when the
+# robot is back on its dock and idle, with carpet on the map, strip it. The robot has to
+# stay that way across two looks, a couple of minutes apart, so a robot that is only
+# charging before it carries on with a clean is left alone.
+CLEAN_STRIP_SETTLE_S = 100
+CLEAN_STRIP_BACKOFF_S = 30 * 60
+
+
+def clean_finish_tick() -> dict:
+    s = load_settings()
+    if not s.strip_after_clean:
+        if store.kv_get("clean_strip_seen"):
+            store.kv_set("clean_strip_seen", 0)
+        return {"ok": True, "note": "strip after a clean is off"}
+    now = int(time.time())
+    if now < (store.kv_get("clean_strip_backoff") or 0):
+        return {"ok": True, "note": "backing off after a failed strip"}
+    try:
+        with _client(s) as c:
+            state = c.task_state()
+            if not state["idle"] or state["status"] != "docked":
+                store.kv_set("clean_strip_seen", 0)
+                return {"ok": True, "note": "the robot is not idle on its dock"}
+            found = c.carpet_summary()
+    except Exception as e:
+        store.kv_set("clean_strip_seen", 0)
+        return {"ok": True, "note": "could not check the robot: %s" % e}
+    if not found["outlines"] and not found["cells"]:
+        store.kv_set("clean_strip_seen", 0)
+        return {"ok": True, "note": "no detected carpet"}
+    seen = store.kv_get("clean_strip_seen") or 0
+    if not seen:
+        store.kv_set("clean_strip_seen", now)
+        return {"ok": True, "note": "carpet on the map; waiting to see the robot stay docked"}
+    if now - seen < CLEAN_STRIP_SETTLE_S:
+        return {"ok": True, "note": "waiting to see the robot stay docked"}
+    store.kv_set("clean_strip_seen", 0)
+    res = strip_carpet(reason="after a clean")
+    if res.get("busy") or res.get("unreachable"):
+        return res          # try again on a later look
+    if not res.get("ok"):
+        store.kv_set("clean_strip_backoff", now + CLEAN_STRIP_BACKOFF_S)
+        store.log_event("warn", "carpet", "strip after a clean failed; not trying again for "
+                        "%d minutes" % (CLEAN_STRIP_BACKOFF_S // 60))
     return res
 
 

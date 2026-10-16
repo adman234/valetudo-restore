@@ -162,6 +162,13 @@ def set_assessment(filename: str, complete: bool, reasons: list) -> None:
                   (1 if complete else 0, json.dumps(reasons), filename))
 
 
+def reset_assessments() -> None:
+    """Forget every automatic verdict so each backup is judged again. The user's
+    override is a separate column and is kept."""
+    with _lock, _conn() as c:
+        c.execute("UPDATE backups SET complete=NULL, reasons=NULL")
+
+
 def set_override(filename: str, on: bool) -> None:
     with _lock, _conn() as c:
         c.execute("UPDATE backups SET override=? WHERE filename=?",

@@ -78,6 +78,9 @@ class Settings(BaseModel):
     # watchdog answers with a wipe. Off by default: it rewrites the map.
     auto_strip_carpet: bool = False
     auto_strip_time: str = Field("02:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # The same strip, whenever the robot is back on its dock, idle, with carpet on
+    # the map: that is how every finished clean leaves it. Off by default.
+    strip_after_clean: bool = False
 
     # --- notifications ---
     notify_on_wipe: bool = True
@@ -141,6 +144,7 @@ ENV_MAP = {
     "VR_PREVENT_WIPES": "prevent_wipes",
     "VR_AUTO_STRIP_CARPET": "auto_strip_carpet",
     "VR_AUTO_STRIP_TIME": "auto_strip_time",
+    "VR_STRIP_AFTER_CLEAN": "strip_after_clean",
     "VR_WEBHOOK_URL": "webhook_url",
     "VR_WEBHOOK_HEADERS": "webhook_headers",
     "VR_NOTIFY_ON_WIPE": "notify_on_wipe",

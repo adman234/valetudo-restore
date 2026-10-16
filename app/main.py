@@ -35,7 +35,7 @@ scheduler = BackgroundScheduler(timezone=os.environ.get("TZ", "UTC"))
 def reschedule() -> None:
     """(Re)install jobs from current settings. Safe to call repeatedly."""
     s = load_settings()
-    for job_id in ("backup", "monitor", "autostrip"):
+    for job_id in ("backup", "monitor", "autostrip", "cleanstrip"):
         try:
             scheduler.remove_job(job_id)
         except Exception:
@@ -60,6 +60,11 @@ def reschedule() -> None:
             service.auto_strip_tick, CronTrigger(hour=int(hh), minute=int(mm)),
             id="autostrip", kwargs={"scheduled": True},
             max_instances=1, coalesce=True, misfire_grace_time=3600,
+        )
+    if s.strip_after_clean:
+        scheduler.add_job(
+            service.clean_finish_tick, IntervalTrigger(minutes=2),
+            id="cleanstrip", max_instances=1, coalesce=True, misfire_grace_time=120,
         )
     log.info("scheduler: backup=%s@%s monitor=%s/%dmin carpet-strip=%s@%s",
              s.backup_enabled, s.cron_summary(),
@@ -245,6 +250,7 @@ def api_status():
         "wipe_guard": store.kv_get("wipe_guard") or {},
         "auto_strip_carpet": s.auto_strip_carpet,
         "auto_strip_time": s.auto_strip_time,
+        "strip_after_clean": s.strip_after_clean,
         "last_strip": store.kv_get("last_strip") or {},
         "backups": len(backups),
         "incomplete_backups": sum(1 for b in backups if not b["full"]),

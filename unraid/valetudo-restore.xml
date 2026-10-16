@@ -50,6 +50,9 @@
   <Config Name="Auto-restore newest only" Target="VR_AUTO_RESTORE_NEWEST_ONLY" Default="true"
           Description="If the newest backup is flagged incomplete, pause auto-restore and let you choose instead of restoring an older one."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Strip after each clean" Target="VR_STRIP_AFTER_CLEAN" Default="false"
+          Description="Strip the detected carpet whenever the robot is idle on its dock with carpet on the map, which is how a finished clean leaves it. Takes a backup and reboots the robot for a few minutes each time."
+          Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="Auto-restore delay (min)" Target="VR_AUTO_RESTORE_DELAY_MINUTES" Default="5"
           Description="Minutes to wait after a confirmed wipe before auto-restore acts. 0 restores at once. The wiped notification says when."
           Type="Variable" Display="advanced" Required="false" Mask="false">5</Config>

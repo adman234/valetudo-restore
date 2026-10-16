@@ -45,7 +45,7 @@
     {% endif %}
     <div class="sub">wipe guard: {% if not s.prevent_wipes %}off{% elif wipe_guard.get('standing_down') %}standing down{% else %}on{% endif %},
       wipes prevented: {{ wipe_guard.get('prevented', 0) }}</div>
-    <div class="sub">carpet strip: {% if s.auto_strip_carpet %}nightly at {{ s.auto_strip_time }}{% if strip_pending %}, waiting for the robot{% endif %}{% else %}manual only{% endif %}{% if last_strip.get('ts') %},
+    <div class="sub">carpet strip: {% if s.auto_strip_carpet %}nightly at {{ s.auto_strip_time }}{% if strip_pending %}, waiting for the robot{% endif %}{% if s.strip_after_clean %} and after each clean{% endif %}{% elif s.strip_after_clean %}after each clean{% else %}manual only{% endif %}{% if last_strip.get('ts') %},
       last {{ last_strip.ts|ts }}: {{ "ok" if last_strip.ok else "failed" }}{% endif %}</div>
   </div>
 </section>

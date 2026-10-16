@@ -139,6 +139,11 @@ that could have helped. So each backup is judged when it is taken, and flagged
 | the probe at backup time found no Valetudo binary, or no config | the robot was wiped (the same test the `WIPED` state uses) |
 | `valetudo_config.json`, `data_config.tar.gz` or any part of the map set is missing | it cannot put the robot back |
 | it has no named rooms, but the last full backup did | the map is the placeholder a wipe leaves behind; this catches a robot where Valetudo was reinstalled by hand after a wipe |
+| it holds no map data (`data_map.tar.gz` has nothing but its small bookkeeping files), but the last full backup did | the robot had no map: after a map reset or while re-mapping. The room names live in the vendor config and survive that, so the rooms check alone does not catch it |
+
+When a new check is added, every backup is judged again once. A backup you marked as
+full stays full. After a deliberate re-map, mark the first backup of the new map as
+full.
 
 A flagged backup is shown in red with its reasons, and then:
 
@@ -222,6 +227,7 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
 | `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
 | `VR_AUTO_STRIP_CARPET` | `false` | nightly carpet strip: remove the detected carpet from the robot's map once a night (room materials stay) |
+| `VR_STRIP_AFTER_CLEAN` | `false` | also strip the carpet whenever the robot is idle on its dock with carpet on the map, i.e. after each clean |
 | `VR_AUTO_STRIP_TIME` | `02:00` | when, `HH:MM` in the container's timezone; pick a time before the robot's own 03:00-05:00 UTC reboot |
 | `VR_PREVENT_WIPES` | `true` | wipe guard: crash-keeper clears the watchdog's first-strike mark so crashes reboot the robot instead of wiping it (at most 3 in a row) |
 | `VR_RESTORE_VENDOR_SETTINGS` | `true` | restore `/data/config/ava` (pet avoidance, obstacle images, room names) |
@@ -287,6 +293,27 @@ Steps 3, 5, 6 and 10 can each be switched off in Settings. With no archive chose
 restore uses the **preferred backup** if you chose one, otherwise the **newest full
 backup**, skipping any newer ones flagged incomplete (see *Incomplete backups*); the
 result lists what it skipped.
+
+### Strip after each clean
+
+Off by default; the checkbox is under *Nightly carpet strip* in Settings. A finished
+clean leaves the carpet it found on the map, and a map with carpet on it is what `ava`
+can crash on at the next clean or boot. This does the same strip as the button
+whenever the robot is **idle on its dock with detected carpet on the map**.
+
+- It looks every 2 minutes. The robot has to be docked, idle by the firmware's own
+  test, and have carpet on the map on **two looks in a row**, at least 100 seconds
+  apart. A robot that is only charging before it carries on with a clean is not idle
+  and is left alone.
+- The check is repeated right before the map is swapped, because the backup and the
+  strip take a minute or two and a clean may have started in the meantime. If so,
+  nothing is touched and the stripped copy stays as a backup.
+- A strip that fails is not tried again for 30 minutes. One that finds the robot busy
+  is simply tried again on a later look.
+- Each strip adds a *stripped* backup and replaces the *pre-strip* one, and costs a
+  reboot of about 4 minutes. Raise *Keep* if you use this. The preferred backup is
+  never removed by the clean-up.
+- It can be used together with the nightly strip; whichever finds carpet strips it.
 
 ### Preferred backup
 
@@ -472,7 +499,7 @@ POST; use **Extra headers** for anything needing an auth token.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness |
-| GET | `/api/status` | current state, plus `incomplete_backups`, `newest_full_backup`, `preferred_backup`, `auto_restore_delay_minutes` and `restore_due` (epoch seconds while an automatic restore is waiting, else 0) |
+| GET | `/api/status` | current state, plus `incomplete_backups`, `newest_full_backup`, `preferred_backup`, `strip_after_clean`, `auto_restore_delay_minutes` and `restore_due` (epoch seconds while an automatic restore is waiting, else 0) |
 | POST | `/api/test-connection` | probe the robot now |
 | POST | `/api/backup` | back up now |
 | POST | `/api/restore` | restore everything; without `filename`, from the preferred backup, or the newest full one if none is preferred |
