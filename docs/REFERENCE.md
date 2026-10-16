@@ -144,7 +144,8 @@ A flagged backup is shown in red with its reasons, and then:
 
 - **Restore all data from newest full backup** and **map only** from the newest
   use the newest *full* backup and skip newer flagged ones. The result lists what
-  was skipped.
+  was skipped. If you have chosen a [preferred backup](#preferred-backup), they use
+  that instead.
 - **Auto-restore does not guess.** With *Only auto-restore from the newest backup*
   on (the default), a flagged newest backup pauses auto-restore instead of falling
   back to an older one. The dashboard shows a banner, one `auto_restore_paused`
@@ -155,7 +156,7 @@ A flagged backup is shown in red with its reasons, and then:
   blank map a wipe leaves). A map with fewer rooms than before, after merging
   rooms or a map reset, is judged full.
 - **Retention never prunes the newest full backup**, even when it falls outside
-  the window.
+  the window. It never prunes the preferred backup either.
 - You can still restore a flagged backup deliberately from its row. The
   confirmation says why it was flagged.
 - If a flag is wrong, for example after deliberately re-mapping, **mark as
@@ -212,10 +213,12 @@ made in the UI. To re-seed, delete `settings.json` from the config volume.
 | `VR_POLL_INTERVAL_MINUTES` | `5` | how often to poll |
 | `VR_CONFIRM_SAMPLES` | `2` | consecutive identical verdicts required before acting |
 | `VR_AUTO_RESTORE` | `false` | restore automatically on a confirmed wipe |
+| `VR_AUTO_RESTORE_DELAY_MINUTES` | `5` | how long to wait after a confirmed wipe before auto-restore acts; `0` acts at once |
 | `VR_MAX_RESTORE_ATTEMPTS` | `3` | attempts allowed per window |
 | `VR_RESTORE_WINDOW_HOURS` | `6` | the window for the above |
 | `VR_AUTO_RESTORE_NEWEST_ONLY` | `true` | if the newest backup is flagged incomplete, pause auto-restore instead of using an older one |
 | `VR_REBOOT_AFTER_RESTORE` | `true` | reboot the robot after every successful restore, manual or automatic |
+| `VR_DOCK_AFTER_RESTORE` | `true` | once a restore is done and the robot is back, send it to its dock if it is not there |
 | `VR_RESTORE_WIFI_KEEPER` | `true` | also reinstall `wifi-keeper.sh` (the boot hook is always rebuilt) |
 | `VR_RESTORE_CRASH_KEEPER` | `true` | install `crash-keeper.sh`, which keeps the watchdog's crash logs where a wipe cannot delete them |
 | `VR_AUTO_STRIP_CARPET` | `false` | nightly carpet strip: remove the detected carpet from the robot's map once a night (room materials stay) |
@@ -277,12 +280,47 @@ services:
 | 7 | the boot hook, rebuilt from `/misc/_root_postboot.sh.tpl` |
 | 8 | the complete map plus `/data/DivideAI`, with `ava` stopped for the swap and restarted after it (it is restarted even without a map, so the vendor settings take effect) |
 | 9 | Valetudo restarted, then a fresh probe so the dashboard shows the new state |
-| 10 | once the robot is back: the cleaning mode and Carpet Mode are checked and, if the firmware changed them, set back through Valetudo |
+| 10 | once the robot is back: the cleaning mode and Carpet Mode are checked and, if the firmware changed them, set back through Valetudo; then the robot is sent to its dock if it is not on it (*Back to the dock after a restore*) |
 | 10 | the robot rebooted, when *Reboot the robot after a restore* is on (the default) |
 
 Steps 3, 5, 6 and 10 can each be switched off in Settings. With no archive chosen, a
-restore uses the **newest full backup** and skips any newer ones flagged
-incomplete (see *Incomplete backups*); the result lists what it skipped.
+restore uses the **preferred backup** if you chose one, otherwise the **newest full
+backup**, skipping any newer ones flagged incomplete (see *Incomplete backups*); the
+result lists what it skipped.
+
+### Preferred backup
+
+Press **prefer** on a backup in the table to make it *the* backup. At most one
+can be preferred; choosing another replaces it, and **unprefer** clears it.
+
+- Every restore that does not name a file uses it: **Restore all data**, **map
+  only** at the top of the page, and auto-restore. This overrides "newest full
+  backup", and *Only auto-restore from the newest backup* no longer applies.
+- It is never deleted, by retention or by hand (unprefer it first), and it does not
+  use up one of the *Keep* slots: *Keep* counts the other backups.
+- Only a full backup can be preferred. If it is later flagged incomplete, nothing
+  falls back to another backup behind your back: a restore stops with an error that
+  names it, and auto-restore pauses with an `auto_restore_paused` notification until
+  you mark it as full or prefer another.
+- A restore from a named file, or from an upload, ignores it.
+
+### Waiting before an automatic restore
+
+When a wipe is confirmed, auto-restore waits *Wait before restoring* minutes
+(default 5; 0 restores at once) and then restores. The time counts from the
+confirmation, which is also when the `wiped` notification goes out. That message
+names the backup it will use and when. To stop it, turn auto-restore off before the
+time is up; the dashboard shows a banner with the time while it waits. If the robot
+is healthy again by then (a false alarm), nothing is restored.
+
+### Back to the dock after a restore
+
+Once a restore is finished and the robot is back up (after the reboot, when that
+is on), a robot that is not on its dock is sent there with Valetudo's own "home"
+control. It does nothing if the robot is already docked or already returning, and it
+never interrupts a robot that is cleaning. It is checked for up to 3 minutes, so a
+Valetudo that is slow to answer is still caught. Switch it off with *Send the robot
+back to its dock after a restore*.
 
 ### Rebooting after a restore
 
@@ -374,7 +412,7 @@ Notifications are sent as a JSON `POST` to the webhook URL:
 | Event | Sent when |
 |---|---|
 | `test` | you press **Send test notification** |
-| `wiped` | a confirmed wipe: SSH ok, binary observed missing |
+| `wiped` | a confirmed wipe: SSH ok, binary observed missing. With auto-restore on, the message names the backup and the wait, and `detail` carries `restore_in_minutes` and `backup` |
 | `wipe_detected` | the robot's `factory_reset.log` holds a new entry |
 | `crashed` | Valetudo is installed but not running |
 | `restored` | a restore completed |
@@ -434,16 +472,17 @@ POST; use **Extra headers** for anything needing an auth token.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness |
-| GET | `/api/status` | current state, plus `incomplete_backups` and `newest_full_backup` |
+| GET | `/api/status` | current state, plus `incomplete_backups`, `newest_full_backup`, `preferred_backup`, `auto_restore_delay_minutes` and `restore_due` (epoch seconds while an automatic restore is waiting, else 0) |
 | POST | `/api/test-connection` | probe the robot now |
 | POST | `/api/backup` | back up now |
-| POST | `/api/restore` | restore everything; without `filename`, from the newest full backup |
+| POST | `/api/restore` | restore everything; without `filename`, from the preferred backup, or the newest full one if none is preferred |
 | POST | `/api/monitor-tick` | run one monitoring poll |
 | POST | `/api/test-webhook` | send a test notification and report the HTTP status |
-| POST | `/api/restore-map` | restore the map from an upload or a stored backup; without `filename`, the newest full one |
-| GET | `/api/backups` | list archives, each with `full`, `complete`, `reasons` and `override` |
+| POST | `/api/restore-map` | restore the map from an upload or a stored backup; without `filename`, the preferred backup, or the newest full one if none is preferred |
+| GET | `/api/backups` | list archives, each with `full`, `complete`, `reasons`, `override` and `preferred` |
 | GET | `/api/backups/{file}` | download an archive |
-| POST | `/api/backups/{file}/delete` | delete an archive |
+| POST | `/api/backups/{file}/prefer` | form field `on=1` makes it the preferred backup (replacing any other; refused if it is flagged incomplete), `on=0` clears the choice |
+| POST | `/api/backups/{file}/delete` | delete an archive (refused for the preferred backup) |
 | POST | `/api/install-helpers` | install or update wifi-keeper and crash-keeper without a restore |
 | POST | `/api/test-command-channel` | read-only: handshake with the robot's miIO channel (UDP 54321), read battery, status and the carpet settings, and list the carpet edits stored with the map |
 | POST | `/api/strip-carpet` | strip the detected carpet from the robot's map now (idle on the dock only; backs up first) |

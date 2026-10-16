@@ -90,15 +90,27 @@
   <div class="grid">
     <label class="check"><input type="checkbox" name="auto_restore" {% if s.auto_restore %}checked{% endif %}> Auto-restore when a wipe is detected</label>
     <label class="check wide"><input type="checkbox" name="auto_restore_newest_only" {% if s.auto_restore_newest_only %}checked{% endif %}> Only auto-restore from the newest backup; if it looks incomplete, wait for me to choose</label>
+    <label>Wait before restoring (min) <input name="auto_restore_delay_minutes" type="number" min="0" max="240" value="{{ s.auto_restore_delay_minutes }}"></label>
     <label>Max attempts <input name="max_restore_attempts" type="number" min="1" max="10" value="{{ s.max_restore_attempts }}"></label>
     <label>Per window (h) <input name="restore_window_hours" type="number" min="1" max="168" value="{{ s.restore_window_hours }}"></label>
     <label class="check wide"><input type="checkbox" name="reboot_after_restore" {% if s.reboot_after_restore %}checked{% endif %}> Reboot the robot after a restore</label>
+    <label class="check wide"><input type="checkbox" name="dock_after_restore" {% if s.dock_after_restore %}checked{% endif %}> Send the robot back to its dock after a restore, if it is not already there</label>
   </div>
   <p class="hint danger-hint">
     Auto-restore writes to the robot. It only ever triggers on a
     <em>confirmed</em> state where SSH succeeded and the binary was observed
-    missing, never on an unreachable robot. It restores from the newest
-    <em>full</em> backup and skips any flagged incomplete.
+    missing, never on an unreachable robot. It restores from the
+    <em>preferred</em> backup if you chose one, otherwise from the newest
+    <em>full</em> backup, skipping any flagged incomplete.
+  </p>
+  <p class="hint">
+    <strong>Wait before restoring</strong> counts from the moment the wipe is
+    confirmed, which is also when the <code>wiped</code> notification is sent, and
+    that message names the backup and the time. Turn auto-restore off during the
+    wait to stop it. 0 restores as soon as the wipe is confirmed.
+    <strong>Send the robot back to its dock</strong> runs once the restore is done
+    and the robot is back up. It does nothing if the robot is already docked or
+    heading there, and never interrupts a robot that is cleaning.
   </p>
   <p class="hint">
     <strong>Only auto-restore from the newest backup</strong> (on by default): if the

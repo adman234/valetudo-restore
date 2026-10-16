@@ -432,6 +432,12 @@ class RobotClient:
                 state["status"] = line[7:]
         return state
 
+    def go_home(self) -> None:
+        """Valetudo's own "return to dock" control."""
+        import json
+        self.valetudo_api("PUT", "/api/v2/robot/capabilities/BasicControlCapability",
+                          json.dumps({"action": "home"}))
+
     def carpet_summary(self) -> dict:
         """
         Detected carpet in the robot's current map: outlines in

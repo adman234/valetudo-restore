@@ -26,6 +26,7 @@
       <div class="err">Newest full backup is from {{ newest_full.ts|ts }}. Newer ones are incomplete.</div>
     {% endif %}
     <div class="sub">next at {{ s.cron_summary() }} {% if not s.backup_enabled %}(disabled){% endif %}</div>
+    <div class="sub">preferred: {% if preferred %}<span class="mono">{{ preferred.filename }}</span>{% else %}none chosen, restores use the newest full backup{% endif %}</div>
   </div>
 
   <div class="card">
@@ -33,6 +34,7 @@
     <div class="big small">{{ ("AUTO, PAUSED" if restore_paused.get('filename') else "AUTO") if s.auto_restore else "MANUAL" }}</div>
     <div class="sub">
       {% if s.auto_restore %}
+        waits {{ s.auto_restore_delay_minutes }} min after a confirmed wipe,
         max {{ s.max_restore_attempts }} per {{ s.restore_window_hours }}h
       {% else %}
         auto-restore is off
@@ -48,6 +50,13 @@
   </div>
 </section>
 
+{% if s.auto_restore and restore_due and restore_due > now_ts %}
+<div class="banner warn">
+  <strong>The robot was wiped.</strong> Auto-restore will run at
+  {{ restore_due|ts }} unless you turn auto-restore off in
+  <a href="/settings">Settings</a> first.
+</div>
+{% endif %}
 {% if restore_paused.get('filename') %}
 <div class="banner warn">
   <strong>Auto-restore is paused.</strong> The robot looks wiped, but the newest
@@ -102,8 +111,8 @@
       Reboot robot
     </button>
     <button class="danger" data-post="/api/restore" data-out="#out"
-            data-confirm="Restore EVERYTHING from the newest full backup? This overwrites Valetudo, its config and the voice pack. Backups flagged incomplete are skipped.{{ rb }}">
-      Restore all data from newest full backup
+            data-confirm="Restore EVERYTHING from {% if preferred %}the preferred backup ({{ preferred.filename }}){% else %}the newest full backup{% endif %}? This overwrites Valetudo, its config and the voice pack. Backups flagged incomplete are skipped.{{ rb }}">
+      Restore all data from {% if preferred %}preferred backup{% else %}newest full backup{% endif %}
     </button>
   </div>
   <p class="hint">
@@ -129,7 +138,7 @@
       {% set warn = b.filename ~ " is flagged INCOMPLETE (" ~ (why or "not checked yet") ~ "). Restoring it can replace your map and settings with what a wipe left behind." %}
       <tr class="{% if not b.full %}incomplete{% endif %}{% if loop.index > 5 %} extra{% endif %}"{% if loop.index > 5 %} hidden{% endif %}>
         <td>{{ b.ts|ts }}</td>
-        <td class="mono">{{ b.filename }}
+        <td class="mono">{{ b.filename }}{% if b.preferred %} <span class="badge ok">preferred</span>{% endif %}
           {% if b.reasons %}
             <div class="reasons{% if b.override %} dim{% endif %}">
               {% if b.override %}Flagged ({{ why }}), but marked as full by you.{% else %}{{ why }}{% endif %}
@@ -155,6 +164,13 @@
           <button class="link" data-post="/api/restore-map" data-field="filename={{ b.filename }}"
                   data-confirm="{{ warn }} Restore its map anyway?{{ rb }}">map only</button>
           {% endif %}
+          {% if b.preferred %}
+          <button class="link" data-post="/api/backups/{{ b.filename }}/prefer" data-field="on=0"
+                  data-confirm="Stop treating {{ b.filename }} as the preferred backup? Restores go back to using the newest full backup, and this one becomes subject to retention again.">unprefer</button>
+          {% elif b.full %}
+          <button class="link" data-post="/api/backups/{{ b.filename }}/prefer" data-field="on=1"
+                  data-confirm="Make {{ b.filename }} the preferred backup? It is never deleted, and every restore that does not name a file, including auto-restore, uses it instead of the newest backup. Only one backup can be preferred; this replaces the current choice.">prefer</button>
+          {% endif %}
           {% if b.override %}
           <button class="link" data-post="/api/backups/{{ b.filename }}/mark-full" data-field="on=0"
                   data-confirm="Stop treating {{ b.filename }} as full? Restore-from-newest and auto-restore will skip it again.">unmark</button>
@@ -162,8 +178,10 @@
           <button class="link" data-post="/api/backups/{{ b.filename }}/mark-full" data-field="on=1"
                   data-confirm="Mark {{ b.filename }} as full? Restore-from-newest and auto-restore will be able to pick it, and retention will protect it. Only do this if you know it holds your real map and settings, for example after deliberately re-mapping.">mark as full</button>
           {% endif %}
+          {% if not b.preferred %}
           <button class="link danger" data-post="/api/backups/{{ b.filename }}/delete"
                   data-confirm="Delete {{ b.filename }}?">delete</button>
+          {% endif %}
         </td>
       </tr>
     {% endfor %}
@@ -178,7 +196,10 @@
   {% endif %}
   <p class="hint">
     Keeping {{ s.keep_backups }}; older archives are pruned automatically, except
-    that the newest full backup is never pruned.
+    that the newest full backup and the preferred backup are never pruned. The
+    preferred backup does not count towards the {{ s.keep_backups }}. Choose one
+    with <em>prefer</em>: every restore that does not name a file, auto-restore
+    included, then uses it instead of the newest backup.
   </p>
   <p class="hint">
     <strong>Incomplete</strong> backups were taken while the robot was wiped, or

@@ -384,6 +384,37 @@ def newest_full(rows: Optional[list] = None) -> Optional[dict]:
     return next((r for r in rows if r["full"]), None)
 
 
+def preferred_backup(rows: Optional[list] = None) -> Optional[dict]:
+    """The backup the user chose to restore from, if any (at most one)."""
+    rows = store.list_backups() if rows is None else rows
+    return next((r for r in rows if r.get("preferred")), None)
+
+
+def pick_restore_source(rows: list) -> tuple:
+    """
+    The backup a restore that names no file uses: the preferred one if the user
+    chose one, otherwise the newest full one. Returns (row, note, error); `row`
+    is None when there is nothing safe to use.
+
+    A preferred backup that is flagged incomplete is NOT swapped for another one
+    behind the user's back: which backup to trust is their call, so it is an
+    error until they mark it full or choose differently.
+    """
+    pref = preferred_backup(rows)
+    if pref:
+        if not pref["full"]:
+            why = "; ".join(pref.get("reasons") or []) or "not checked yet"
+            return None, None, (
+                "The preferred backup %s is flagged incomplete (%s). Mark it as full, "
+                "choose another preferred backup, or restore a specific one from the "
+                "table." % (pref["filename"], why))
+        return pref, "using the preferred backup %s" % pref["filename"], None
+    chosen = newest_full(rows)
+    if chosen:
+        return chosen, _skipped_note(rows, chosen), None
+    return None, None, _no_full_backup_msg(rows)
+
+
 def _no_full_backup_msg(rows: list) -> str:
     if not rows:
         return "no backup available to restore"
@@ -575,7 +606,9 @@ def prune_backups(s: Settings) -> int:
     store.reconcile_backups(BACKUP_DIR)
     assess_pending()
     rows = store.list_backups()
-    doomed = rows[s.keep_backups:]
+    # The preferred backup is never pruned, and does not use up a retention slot:
+    # `keep_backups` is how many OTHER backups are kept.
+    doomed = [r for r in rows if not r.get("preferred")][s.keep_backups:]
     # Never prune the newest full backup. If the robot sits wiped for longer
     # than the retention window, every nightly backup is incomplete, and a
     # count-based prune would delete the last one that can restore it.
@@ -642,16 +675,15 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
         rows = store.list_backups()
         if filename:
             chosen = next((r for r in rows if r["filename"] == filename), None)
+            err = "backup not found: %s" % filename
         else:
-            # "Newest" means newest FULL. A backup taken after a wipe but
-            # before a restore captures the wipe, and restoring it would
-            # overwrite a recoverable robot with the placeholder state.
-            chosen = newest_full(rows)
-            if chosen:
-                skipped = _skipped_note(rows, chosen)
+            # The preferred backup if there is one. Otherwise "newest" means
+            # newest FULL: a backup taken after a wipe but before a restore
+            # captures the wipe, and restoring it would overwrite a recoverable
+            # robot with the placeholder state.
+            chosen, skipped, err = pick_restore_source(rows)
         if not chosen:
-            return {"ok": False, "error": ("backup not found: %s" % filename)
-                    if filename else _no_full_backup_msg(rows)}
+            return {"ok": False, "error": err}
         archive = BACKUP_DIR / chosen["filename"]
         if not archive.exists():
             return {"ok": False, "error": "backup file missing: %s" % archive.name}
@@ -868,7 +900,7 @@ def run_restore(filename: Optional[str] = None, reason: str = "manual",
         rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(
             s, steps, "restore", modes)
         if not rebooting:
-            _spawn(_reapply_modes, s, modes, "restore")
+            _spawn(_settle_after_restore, s, modes, "restore")
         store.log_event("info", "restore",
                         "restore from %s (%s)" % (chosen["filename"], reason), steps)
         if s.notify_on_restore:
@@ -1240,11 +1272,10 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
             store.reconcile_backups(BACKUP_DIR)
             assess_pending()
             rows = store.list_backups()
-            chosen = newest_full(rows)
+            chosen, note, err = pick_restore_source(rows)
             if not chosen:
-                return {"ok": False, "error": _no_full_backup_msg(rows)}
+                return {"ok": False, "error": err}
             filename = chosen["filename"]
-            note = _skipped_note(rows, chosen)
             if note:
                 steps.append(note)
         p = BACKUP_DIR / filename
@@ -1300,7 +1331,7 @@ def restore_map(blob: Optional[bytes] = None, filename: Optional[str] = None,
         rebooting = bool(s.reboot_after_restore) and _reboot_after_restore(
             s, steps, "map restore", keep)
         if not rebooting:
-            _spawn(_reapply_modes, s, keep, "map restore")
+            _spawn(_settle_after_restore, s, keep, "map restore")
         store.log_event("info", "restore-map", "map restored", steps)
         return {"ok": True, "steps": steps, "state": state, "rebooting": rebooting,
                 "note": "Previous map moved to %s on the robot. %s" % (
@@ -1621,6 +1652,61 @@ def _reapply_modes(s: Settings, want: Optional[dict], what: str,
         return {}
 
 
+DOCK_WAIT_S = 180
+DOCK_POLL_S = 15
+# Valetudo statuses that mean "already there" or "already on the way"
+AT_OR_HEADING_TO_DOCK = ("docked", "returning")
+# ... and ones that mean it is in the middle of a job, which a restore never
+# causes and this must not interrupt
+DOING_A_JOB = ("cleaning", "moving", "manual_control")
+
+
+def _return_to_dock(s: Settings, what: str, wait: int = DOCK_WAIT_S,
+                    poll: int = DOCK_POLL_S) -> str:
+    """
+    After a restore, once the robot is back: if it is not on its dock, send it
+    there with Valetudo's own "home" control. A wipe, or the reboot, can leave
+    it anywhere. Never raises. Returns docked, returning, sent, busy, skipped
+    or failed.
+    """
+    if not s.dock_after_restore:
+        return "skipped"
+    waited = 0
+    try:
+        while True:
+            with _client(s) as c:
+                status = (c.task_state().get("status") or "")
+                if status in AT_OR_HEADING_TO_DOCK:
+                    return status
+                if status in DOING_A_JOB:
+                    store.log_event("info", "dock", "after the %s the robot is %s; "
+                                    "left it alone" % (what, status))
+                    return "busy"
+                if status:
+                    c.go_home()
+                    store.log_event("info", "dock", "after the %s the robot was %s, not on "
+                                    "its dock; sent it home" % (what, status))
+                    return "sent"
+            if waited >= wait:
+                store.log_event("warn", "dock", "could not tell where the robot is after "
+                                "the %s: Valetudo did not report a status within %ds"
+                                % (what, wait))
+                return "failed"
+            time.sleep(poll)
+            waited += poll
+    except Exception as e:
+        log.warning("sending the robot home after the %s failed: %s", what, e)
+        store.log_event("warn", "dock", "could not send the robot home after the %s: %s"
+                        % (what, e))
+        return "failed"
+
+
+def _settle_after_restore(s: Settings, modes: Optional[dict], what: str) -> None:
+    """Everything done once the robot is back after a restore, in order."""
+    _reapply_modes(s, modes, what)
+    _return_to_dock(s, what)
+
+
 def _after_reboot(s: Settings, what: str, modes: Optional[dict] = None) -> None:
     """
     The robot was just told to reboot. Show it as OFFLINE (it is about to be)
@@ -1665,7 +1751,7 @@ def _confirm_back_after_reboot(s: Settings, what: str,
             if state == STATE_HEALTHY:
                 store.log_event("info", "reboot", "robot back %ds after the reboot "
                                 "(%s): HEALTHY" % (waited, what))
-                _reapply_modes(s, modes, what)
+                _settle_after_restore(s, modes, what)
             elif done:
                 store.log_event("error", "reboot", "robot came back %ds after the "
                                 "reboot (%s) %s" % (waited, what, state))
@@ -1757,8 +1843,73 @@ def _attempts_bump(s: Settings) -> None:
     store.kv_set("restore_attempts", rec)
 
 
+# The scheduled poll, the Test connection button and the restore timer can all call
+# monitor_tick; only one may act at a time, or two of them could start a restore.
+_MONITOR_LOCK = threading.Lock()
+WIPE_RESTORE_STALE_S = 24 * 3600
+
+
 def monitor_tick() -> dict:
     """One monitoring poll. Called on the schedule and from the UI."""
+    if not _MONITOR_LOCK.acquire(blocking=False):
+        return {"state": None, "acted": False, "note": "another monitor poll is running"}
+    try:
+        return _monitor_poll()
+    finally:
+        _MONITOR_LOCK.release()
+
+
+def _restore_plan(s: Settings) -> tuple[str, dict]:
+    """What auto-restore will do about a wipe, for the notification: (text, detail)."""
+    if not s.auto_restore:
+        return "", {}
+    rows = store.list_backups()
+    row, _note, _err = pick_restore_source(rows)
+    detail = {"restore_in_minutes": s.auto_restore_delay_minutes,
+              "backup": row["filename"] if row else None}
+    if not row:
+        return "", detail
+    when = ("in %d minute%s" % (s.auto_restore_delay_minutes,
+                                "" if s.auto_restore_delay_minutes == 1 else "s")
+            if s.auto_restore_delay_minutes else "now")
+    return " Auto-restore from %s %s." % (row["filename"], when), detail
+
+
+def _wipe_restore_due(s: Settings) -> int:
+    """
+    When auto-restore may act on the wipe in progress (epoch seconds). Set the
+    first time it is asked about, counted from the confirmed wipe, and kept until
+    the robot is healthy again.
+    """
+    now = int(time.time())
+    rec = store.kv_get("wipe_restore_due") or {}
+    if rec.get("due") and now - rec.get("since", 0) < WIPE_RESTORE_STALE_S:
+        return rec["due"]
+    due = now + s.auto_restore_delay_minutes * 60
+    store.kv_set("wipe_restore_due", {"due": due, "since": now})
+    store.log_event("info", "monitor",
+                    "wipe confirmed; auto-restore waits %d minute(s) before restoring"
+                    % s.auto_restore_delay_minutes)
+    _spawn(_restore_timer, due)
+    return due
+
+
+def _restore_timer(due: int) -> None:
+    """
+    Wake up when the wait is over rather than at the next poll, so the delay is
+    the one configured and not that plus up to a poll interval. The poll still
+    acts if this thread is lost to a restart of the container.
+    """
+    time.sleep(max(0, due - time.time()) + 2)
+    if (store.kv_get("wipe_restore_due") or {}).get("due") != due:
+        return
+    try:
+        monitor_tick()
+    except Exception:
+        log.exception("restore timer: monitor poll failed")
+
+
+def _monitor_poll() -> dict:
     s = load_settings()
     state, p = classify(s)
     _prev, streak = record_state(state, p)
@@ -1793,6 +1944,8 @@ def monitor_tick() -> dict:
 
     if state == STATE_HEALTHY:
         store.kv_set("restore_attempts", {"n": 0, "t0": 0})
+        if store.kv_get("wipe_restore_due"):
+            store.kv_set("wipe_restore_due", {})
         if store.kv_get("auto_restore_paused"):
             store.kv_set("auto_restore_paused", {})
         return {"state": state, "streak": streak, "acted": False}
@@ -1811,8 +1964,9 @@ def monitor_tick() -> dict:
 
     if streak == s.confirm_samples:
         if state == STATE_WIPED and s.notify_on_wipe:
-            notify(s, "wiped", "Valetudo binary is gone - /data was wiped",
-                   {"factory_log": p.factory_log})
+            plan, plan_detail = _restore_plan(s)
+            notify(s, "wiped", "Valetudo binary is gone - /data was wiped." + plan,
+                   dict({"factory_log": p.factory_log}, **plan_detail))
         elif state == STATE_CRASHED and s.notify_on_crash:
             notify(s, "crashed", "Valetudo is installed but not running")
 
@@ -1820,26 +1974,39 @@ def monitor_tick() -> dict:
         return {"state": state, "streak": streak, "acted": False,
                 "note": "auto_restore disabled"}
 
-    # Ambiguous data: the robot is wiped but the NEWEST backup is flagged
-    # incomplete. Falling back to an older backup would be a guess about which
-    # one to trust, so leave that to the user: pause, and say so once.
-    if state == STATE_WIPED and s.auto_restore_newest_only:
+    # Ambiguous data: the robot is wiped but the backup auto-restore would use is
+    # flagged incomplete. That is the preferred backup if the user chose one,
+    # otherwise the NEWEST. Falling back to another backup would be a guess about
+    # which one to trust, so leave that to the user: pause, and say so once.
+    if state == STATE_WIPED:
         store.reconcile_backups(BACKUP_DIR)
         assess_pending()
         rows = store.list_backups()
-        if rows and not rows[0]["full"]:
-            newest = rows[0]
-            why = "; ".join(newest.get("reasons") or []) or "not checked yet"
-            if (store.kv_get("auto_restore_paused") or {}).get("filename") != newest["filename"]:
+        pref = preferred_backup(rows)
+        blocker, kind = None, ""
+        if pref and not pref["full"]:
+            blocker, kind = pref, "preferred"
+        elif not pref and s.auto_restore_newest_only and rows and not rows[0]["full"]:
+            blocker, kind = rows[0], "newest"
+        if blocker:
+            why = "; ".join(blocker.get("reasons") or []) or "not checked yet"
+            if (store.kv_get("auto_restore_paused") or {}).get("filename") != blocker["filename"]:
                 store.kv_set("auto_restore_paused", {"ts": int(time.time()),
-                                                     "filename": newest["filename"], "reasons": why})
-                msg = ("Auto-restore paused: the robot is wiped, but the newest backup %s is "
+                                                     "filename": blocker["filename"], "reasons": why})
+                msg = ("Auto-restore paused: the robot is wiped, but the %s backup %s is "
                        "flagged incomplete (%s). Choose a backup to restore, or mark it as "
-                       "full." % (newest["filename"], why))
+                       "full." % (kind, blocker["filename"], why))
                 store.log_event("warn", "monitor", msg)
-                notify(s, "auto_restore_paused", msg, {"backup": newest["filename"], "reasons": why})
+                notify(s, "auto_restore_paused", msg, {"backup": blocker["filename"], "reasons": why})
             return {"state": state, "streak": streak, "acted": False,
-                    "note": "auto-restore paused: newest backup is incomplete"}
+                    "note": "auto-restore paused: the %s backup is incomplete" % kind}
+
+    # Give the wipe a configurable wait before acting on it.
+    if state == STATE_WIPED and s.auto_restore_delay_minutes > 0:
+        due = _wipe_restore_due(s)
+        if time.time() < due:
+            return {"state": state, "streak": streak, "acted": False,
+                    "note": "waiting to restore", "restore_due": due}
 
     if not _attempts_ok(s):
         store.log_event("error", "monitor",
@@ -1862,6 +2029,7 @@ def monitor_tick() -> dict:
             return {"state": state, "streak": streak, "acted": False,
                     "error": str(e)}
 
+    store.kv_set("wipe_restore_due", {})
     res = run_restore(reason="auto (%s)" % state)
     return {"state": state, "streak": streak, "acted": True,
             "action": "restore", "result": res}

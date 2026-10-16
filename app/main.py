@@ -152,6 +152,9 @@ def index(request: Request):
         "monitor": mon,
         "backups": backups,
         "newest_full": service.newest_full(backups),
+        "preferred": service.preferred_backup(backups),
+        "now_ts": int(time.time()),
+        "restore_due": (store.kv_get("wipe_restore_due") or {}).get("due", 0),
         "diagnostics": service.list_diagnostics(),
         "events": store.recent_events(40),
         "last_backup_ok": store.kv_get("last_backup_ok", 0),
@@ -232,6 +235,7 @@ def api_status():
     s = load_settings()
     backups = store.list_backups()
     nf = service.newest_full(backups)
+    pref = service.preferred_backup(backups)
     return {
         "version": __version__,
         "monitor": store.kv_get("monitor", {}),
@@ -245,7 +249,11 @@ def api_status():
         "backups": len(backups),
         "incomplete_backups": sum(1 for b in backups if not b["full"]),
         "newest_full_backup": {"filename": nf["filename"], "ts": nf["ts"]} if nf else None,
+        "preferred_backup": pref["filename"] if pref else None,
         "auto_restore": s.auto_restore,
+        "auto_restore_delay_minutes": s.auto_restore_delay_minutes,
+        "restore_due": (store.kv_get("wipe_restore_due") or {}).get("due", 0),
+        "dock_after_restore": s.dock_after_restore,
         "key_present": Path(s.ssh_key_path).exists(),
     }
 
@@ -405,6 +413,30 @@ def api_mark_full(filename: str, on: str = Form(default="1")):
     return {"ok": True, "filename": filename, "marked_full": val}
 
 
+@app.post("/api/backups/{filename}/prefer")
+def api_prefer(filename: str, on: str = Form(default="1")):
+    """
+    Choose the one backup every restore without a named file uses, and that is
+    never deleted. Choosing another replaces it; on=0 clears the choice.
+    """
+    rows = store.list_backups()
+    row = next((b for b in rows if b["filename"] == filename), None)
+    if not row:
+        raise HTTPException(404, "not found")
+    val = str(on).lower() in ("1", "true", "on", "yes")
+    if val:
+        if not row["full"]:
+            return {"ok": False, "error": "%s is flagged incomplete. Mark it as full first, "
+                    "so a restore is never pointed at a backup that cannot put the robot "
+                    "back." % filename}
+        store.set_preferred(filename)
+        store.log_event("info", "backup", "%s is now the preferred backup" % filename)
+    elif row.get("preferred"):
+        store.set_preferred(None)
+        store.log_event("info", "backup", "%s is no longer the preferred backup" % filename)
+    return {"ok": True, "filename": filename, "preferred": val}
+
+
 @app.get("/api/backups/{filename}")
 def api_download(filename: str):
     p = (BACKUP_DIR / filename).resolve()
@@ -418,6 +450,9 @@ def api_delete(filename: str):
     p = (BACKUP_DIR / filename).resolve()
     if p.parent != BACKUP_DIR.resolve():
         raise HTTPException(400, "bad path")
+    if any(b["filename"] == filename and b.get("preferred") for b in store.list_backups()):
+        return {"ok": False, "error": "%s is the preferred backup and is never deleted. "
+                "Choose another preferred backup, or clear the choice, first." % filename}
     if p.exists():
         p.unlink()
     store.forget_backup(filename)

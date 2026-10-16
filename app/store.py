@@ -51,6 +51,9 @@ MIGRATIONS = {
         ("reasons", "TEXT"),
         # the user vouched for this backup, overriding the automatic verdict
         ("override", "INTEGER NOT NULL DEFAULT 0"),
+        # the one backup the user chose as THE one to restore from: never pruned,
+        # and used by every restore that does not name a file. At most one row.
+        ("preferred", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 
@@ -163,6 +166,14 @@ def set_override(filename: str, on: bool) -> None:
     with _lock, _conn() as c:
         c.execute("UPDATE backups SET override=? WHERE filename=?",
                   (1 if on else 0, filename))
+
+
+def set_preferred(filename: Optional[str]) -> None:
+    """Make `filename` the preferred backup, or clear the choice with None.
+    One statement, so there can never be two."""
+    with _lock, _conn() as c:
+        c.execute("UPDATE backups SET preferred = CASE WHEN filename=? THEN 1 ELSE 0 END",
+                  (filename if filename is not None else "",))
 
 
 def forget_backup(filename: str) -> None:

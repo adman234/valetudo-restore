@@ -34,7 +34,12 @@ restore. The full investigation is in [docs/FIRMWARE.md](docs/FIRMWARE.md).
 - **Monitoring** every few minutes. It tells a wiped robot apart from one that is just
   off Wi-Fi, and never acts on a failed check alone.
 - **One-click restore** of everything a wiped robot needs, including a map that loads
-  with its rooms and floor materials. Auto-restore is available but off by default.
+  with its rooms and floor materials. Auto-restore is available but off by default; it
+  waits a configurable number of minutes after a confirmed wipe, and sends the robot
+  back to its dock once it is restored.
+- **A preferred backup**: mark one backup as the one to restore from. It is never
+  deleted and every restore that does not name a file, auto-restore included, uses it
+  instead of the newest.
 - **Incomplete-backup detection**, so a backup taken after a wipe is never restored or
   allowed to push good backups out of retention.
 - **Notifications** by webhook to Home Assistant, ntfy, Discord and similar.

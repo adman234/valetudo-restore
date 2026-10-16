@@ -46,6 +46,10 @@ class Settings(BaseModel):
     # When the newest backup is flagged incomplete, auto-restore does NOT fall
     # back to an older one: which backup to trust is then the user's call.
     auto_restore_newest_only: bool = True
+    # How long to wait after a wipe is confirmed before auto-restore acts, so a
+    # robot that is still mid-reboot, or that you are about to look at yourself,
+    # is left alone. 0 restores as soon as the wipe is confirmed.
+    auto_restore_delay_minutes: int = Field(5, ge=0, le=240)
     max_restore_attempts: int = Field(3, ge=1, le=10)
     restore_window_hours: int = Field(6, ge=1, le=168)
     # Reboot once a restore (full or map-only, manual or automatic) succeeds.
@@ -53,6 +57,9 @@ class Settings(BaseModel):
     # restore to take; after a reboot every process starts against the
     # restored files.
     reboot_after_restore: bool = True
+    # Once a restore is done and the robot is back up, send it to its dock if it
+    # is not already there (a wipe or the reboot can leave it anywhere).
+    dock_after_restore: bool = True
     # Reinstall the wifi-keeper + boot hook alongside Valetudo itself.
     # The boot hook is NOT optional in practice: /etc/rc.sysinit:73 is the only
     # thing that starts Valetudo, and it carries VALETUDO_CONFIG_PATH.
@@ -124,9 +131,11 @@ ENV_MAP = {
     "VR_CONFIRM_SAMPLES": "confirm_samples",
     "VR_AUTO_RESTORE": "auto_restore",
     "VR_AUTO_RESTORE_NEWEST_ONLY": "auto_restore_newest_only",
+    "VR_AUTO_RESTORE_DELAY_MINUTES": "auto_restore_delay_minutes",
     "VR_MAX_RESTORE_ATTEMPTS": "max_restore_attempts",
     "VR_RESTORE_WINDOW_HOURS": "restore_window_hours",
     "VR_REBOOT_AFTER_RESTORE": "reboot_after_restore",
+    "VR_DOCK_AFTER_RESTORE": "dock_after_restore",
     "VR_RESTORE_WIFI_KEEPER": "restore_wifi_keeper",
     "VR_RESTORE_CRASH_KEEPER": "restore_crash_keeper",
     "VR_PREVENT_WIPES": "prevent_wipes",
