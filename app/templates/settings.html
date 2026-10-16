@@ -74,25 +74,6 @@
     The dashboard's <em>Strip detected carpet</em> button does the same thing on demand.
   </p>
 
-  <h2>Carpet detection overrides</h2>
-  <div class="grid">
-    <label class="check wide"><input type="checkbox" name="save_carpet_overrides" {% if s.save_carpet_overrides %}checked{% endif %}> Save the robot's carpet detection overrides in each backup</label>
-    <label class="check wide"><input type="checkbox" name="restore_carpet_overrides" {% if s.restore_carpet_overrides %}checked{% endif %}> Put the overrides from the backup back on a restore</label>
-  </div>
-  <p class="hint">
-    Both off by default. Settings that make the robot detect less carpet, none of which
-    survive a wipe or a restore on their own: the <strong>ultrasonic carpet sensor</strong>
-    switched off, the <strong>camera's carpet classifier</strong> switch, the
-    <strong>carpet sensitivity</strong> level, and the <strong>line laser's carpet
-    inspection</strong> (a config override that goes in the boot hook, which a restore
-    rebuilds). Saving records their current values in the backup, over the robot's
-    command channel; a robot that does not answer there does not cost you the backup.
-    Restoring puts the values from the backup being restored back once the robot is up
-    again: the three switches are set and read back, and the laser override is added to the
-    boot hook and mounted. A map-only restore leaves them alone. A backup taken without
-    the first box has nothing to put back.
-  </p>
-
   <h2>Monitoring</h2>
   <div class="grid">
     <label class="check"><input type="checkbox" name="monitor_enabled" {% if s.monitor_enabled %}checked{% endif %}> Monitoring enabled</label>

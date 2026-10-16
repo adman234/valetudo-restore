@@ -160,7 +160,6 @@ def index(request: Request):
         "wipe_guard": store.kv_get("wipe_guard") or {},
         "last_strip": store.kv_get("last_strip") or {},
         "strip_pending": bool(store.kv_get("auto_strip_pending")),
-        "carpet_saved": store.kv_get("carpet_overrides_saved") or {},
         "binary_cached": service.binary_cache_path(s.valetudo_arch).exists(),
         "key_present": Path(s.ssh_key_path).exists(),
     })
@@ -243,9 +242,6 @@ def api_status():
         "auto_strip_carpet": s.auto_strip_carpet,
         "auto_strip_time": s.auto_strip_time,
         "last_strip": store.kv_get("last_strip") or {},
-        "save_carpet_overrides": s.save_carpet_overrides,
-        "restore_carpet_overrides": s.restore_carpet_overrides,
-        "carpet_overrides_saved": store.kv_get("carpet_overrides_saved") or {},
         "backups": len(backups),
         "incomplete_backups": sum(1 for b in backups if not b["full"]),
         "newest_full_backup": {"filename": nf["filename"], "ts": nf["ts"]} if nf else None,

@@ -42,9 +42,6 @@ restore. The full investigation is in [docs/FIRMWARE.md](docs/FIRMWARE.md).
   and `crash-keeper` saves the watchdog's crash logs somewhere a wipe cannot delete them.
 - **Carpet strip**, on demand or nightly (off by default): removes the carpet the robot
   detected from its map, the data its firmware crashes on, and keeps your room materials.
-- **Carpet detection overrides** (off by default): save the robot's settings that make it
-  detect less carpet (ultrasonic sensor off, camera carpet switch, sensitivity, laser
-  inspection off) in each backup, and put them back on a restore. See `docs/FIRMWARE.md`.
 - **Wipe guard** (in `crash-keeper`, on by default): a run of `ava` crashes reboots the
   robot instead of letting the vendor watchdog factory-reset it.
 
