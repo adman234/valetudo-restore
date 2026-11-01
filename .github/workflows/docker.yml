@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  # Weekly rebuild so :latest picks up security fixes in the python:3.12-alpine
+  # base image. Layers come from the cache, so if the base image hasn't changed
+  # nothing is re-downloaded by Unraid.
+  schedule:
+    - cron: "33 5 * * 2"
   workflow_dispatch:
 
 env:
